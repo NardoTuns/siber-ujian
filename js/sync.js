@@ -83,7 +83,10 @@ const Sync = (function () {
 
   async function getActiveAttempts(examId) {
     const list = await DB.getAllByIndex('attempts', 'exam_id', examId);
-    return list.filter(function (a) { return ACTIVE_ATTEMPT_STATUSES.indexOf(a.status) !== -1; });
+    return list.filter(function (a) {
+      if (a.status === 'IN_PROGRESS') return true;
+      return a.sync_status !== 'SYNCED' && ACTIVE_ATTEMPT_STATUSES.indexOf(a.status) !== -1;
+    });
   }
 
   /* ---------- Verifikasi paket dari server ---------- */
