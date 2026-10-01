@@ -84,7 +84,9 @@ const DB = (function () {
 
   /**
    * Menjalankan satu transaksi. Promise selesai SETELAH data benar-benar tertulis.
-   * work(transaksi, setResult)
+   * work(transaksi, setResult, failTx)
+   *   - setResult(nilai): nilai yang dikembalikan jika transaksi berhasil
+   *   - failTx(kode, pesan): batalkan transaksi dengan error yang jelas
    */
   function run(storeNames, mode, work) {
     return open().then(function (db) {
@@ -99,14 +101,28 @@ const DB = (function () {
           return;
         }
         let result;
+        let customError = null;
+
+        function failTx(code, message) {
+          customError = new Error(message);
+          customError.code = code;
+          try { t.abort(); } catch (ignore) { /* sudah selesai */ }
+        }
+
         t.oncomplete = function () { resolve(result); };
-        t.onerror = function () { reject(t.error || new Error('Transaksi database gagal.')); };
-        t.onabort = function () { reject(t.error || new Error('Transaksi dibatalkan. Kemungkinan memori perangkat penuh.')); };
+        t.onabort = function () {
+          reject(customError || t.error || new Error('Transaksi dibatalkan. Kemungkinan memori perangkat penuh.'));
+        };
+
         try {
-          work(t, function (v) { result = v; });
+          work(t, function (v) { result = v; }, failTx);
         } catch (e) {
-          try { t.abort(); } catch (ignore) { /* sudah dibatalkan */ }
-          reject(e);
+          customError = customError || e;
+          try {
+            t.abort();
+          } catch (ignore) {
+            reject(customError);
+          }
         }
       });
     });
@@ -190,7 +206,6 @@ const DB = (function () {
 
   /* ---------- Penyimpanan permanen ---------- */
 
-  /** Meminta browser agar data TIDAK dihapus otomatis saat memori penuh. */
   async function requestPersistence() {
     if (!navigator.storage || !navigator.storage.persist) return null;
     try {
@@ -231,6 +246,7 @@ const DB = (function () {
     VERSION: VERSION,
     STORES: STORES,
     open: open,
+    transaction: run,
     get: get,
     put: put,
     putMany: putMany,
