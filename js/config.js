@@ -1,7 +1,7 @@
 /**
  * SIBER-UJIAN — config.js
  * Pengaturan aplikasi di sisi siswa.
- * JANGAN menaruh password, kunci jawaban, atau data rahasia di sini.
+ * JANGAN menaruh password, token, kunci jawaban, atau data rahasia di sini.
  */
 const SIBER_CONFIG = {
   // URL Web App Google Apps Script (harus berakhiran /exec)
@@ -16,10 +16,6 @@ const SIBER_CONFIG = {
   // Kekuatan "sidik jari" password di perangkat. Jangan diturunkan.
   LOCAL_PBKDF2_ITERATIONS: 100000,
 
-  // SEMENTARA (Phase 5-7): langkah token dilewati karena verifikasi token dibuat di Phase 8.
-  // WAJIB diubah menjadi false di Phase 8 sebelum dipakai ujian sungguhan.
-  DEV_SKIP_TOKEN: true,
-
   // Versi aplikasi di sisi siswa (naikkan setiap ada perubahan)
-  CLIENT_VERSION: '0.7.0'
+  CLIENT_VERSION: '0.8.0'
 };
