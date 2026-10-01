@@ -1,7 +1,9 @@
 /**
  * SIBER-UJIAN — config.js
- * Pengaturan aplikasi di sisi siswa.
+ * Pengaturan aplikasi di sisi siswa dan guru.
  * JANGAN menaruh password, token, kunci jawaban, atau data rahasia di sini.
+ *
+ * ATURAN: setiap kali mengubah file APA PUN di GitHub, naikkan CLIENT_VERSION.
  */
 const SIBER_CONFIG = {
   // URL Web App Google Apps Script (harus berakhiran /exec)
@@ -16,6 +18,12 @@ const SIBER_CONFIG = {
   // Kekuatan "sidik jari" password di perangkat. Jangan diturunkan.
   LOCAL_PBKDF2_ITERATIONS: 100000,
 
-  // Versi aplikasi di sisi siswa (naikkan setiap ada perubahan)
-  CLIENT_VERSION: '0.12.0'
+  // true HANYA saat pengujian: menampilkan "Panel debug".
+  DEBUG: false,
+
+  // true HANYA saat pengujian: menampilkan tombol "Hapus semua data lokal".
+  ALLOW_LOCAL_WIPE: false,
+
+  // Versi aplikasi (naikkan setiap ada perubahan file)
+  CLIENT_VERSION: '1.0.0'
 };
