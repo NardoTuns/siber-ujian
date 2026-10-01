@@ -1,10 +1,10 @@
 /**
  * SIBER-UJIAN — exam.js
- * Mengerjakan ujian MODE TOTAL dan MODE PER_SOAL.
+ * Mengerjakan ujian MODE TOTAL dan MODE PER_SOAL, dengan pemulihan yang kuat.
  *
  * ATURAN WAJIB (kedua mode):
  *  - Setiap jawaban LANGSUNG disimpan ke IndexedDB saat dipilih.
- *  - Waktu dihitung dari timestamp yang tersimpan, bukan dari setInterval.
+ *  - Waktu dihitung dari timestamp tersimpan + jam efektif (Timer.now), bukan setInterval.
  *  - Urutan soal/pilihan dibuat sekali saat mulai dan tidak pernah berubah.
  *  - Ujian yang sudah selesai tidak dapat dibuka kembali.
  *
@@ -12,21 +12,33 @@
  *  - Setiap soal punya waktu sendiri (question_started_at_ms .. question_end_at_ms).
  *  - Tidak boleh maju sebelum waktu soal habis, walaupun sudah menjawab.
  *  - Tidak boleh kembali dan tidak boleh melompat.
- *  - Saat waktu soal habis: soal dikunci, soal berikutnya dimulai (waktu mulai = saat itu).
+ *  - Saat waktu soal habis: soal dikunci, soal berikutnya dimulai.
  *  - Jawaban untuk soal yang sudah terkunci DITOLAK oleh database.
+ *
+ * PEMULIHAN (Phase 7):
+ *  - Data attempt diperiksa saat dibuka ulang; timer_state diperbaiki dari attempt.
+ *  - Jam mundur (saat terbuka maupun tertutup) dideteksi dan dicatat di clock_events.
+ *  - Data rusak: ujian bisa ditutup dengan jawaban tersimpan tetap aman.
+ *  - Hanya satu tab yang boleh membuka ujian.
  */
 const Exam = (function () {
   'use strict';
 
-  const HEARTBEAT_MS = 15000;
-  const SAVE_GRACE_MS = 2000; // toleransi proses simpan untuk ketukan di detik terakhir
+  const HEARTBEAT_MS = 5000;
+  const SAVE_GRACE_MS = 2000;                 // toleransi proses simpan untuk ketukan di detik terakhir
+  const RESUME_BACKWARD_TOLERANCE_MS = 5000;  // jam mundur saat tertutup lebih dari ini dicatat
+  const CLOSED_GAP_REPORT_MS = 60000;         // aplikasi tertutup lebih dari ini dicatat
+  const MAX_CLOCK_EVENTS = 100;
+  const EXAM_LOCK_NAME = 'siber-ujian-exam';
+
   const $ = UI.$;
   const el = UI.el;
 
   const REASON_TEXT = {
     MANUAL: 'Diselesaikan siswa',
     TIME_UP: 'Waktu ujian habis',
-    ALL_DONE: 'Semua soal selesai (waktu soal terakhir habis)'
+    ALL_DONE: 'Semua soal selesai (waktu soal terakhir habis)',
+    DATA_ERROR: 'Ditutup karena data di perangkat rusak'
   };
 
   let hooks = {};
@@ -37,9 +49,50 @@ const Exam = (function () {
   let noticeHandle = null;
   let saveChain = Promise.resolve();
   let saveSeq = 0;
+  let releaseLockFn = null;
+  let wakeLock = null;
 
   function fail(code, message) { return { ok: false, code: code, message: message }; }
   function isPerQ() { return !!S && S.attempt.mode === 'PER_SOAL'; }
+  function makeError(code, message) { const e = new Error(message); e.code = code; return e; }
+
+  /* =========================================================
+   * KUNCI SATU TAB & LAYAR TETAP MENYALA
+   * ========================================================= */
+
+  /** Hanya satu tab yang boleh membuka ujian. true jika berhasil (atau browser tidak mendukung). */
+  function acquireExamLock() {
+    if (releaseLockFn) return Promise.resolve(true); // sudah dipegang halaman ini
+    if (!navigator.locks || !navigator.locks.request) return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      navigator.locks.request(EXAM_LOCK_NAME, { ifAvailable: true }, function (lock) {
+        if (!lock) { resolve(false); return undefined; }
+        resolve(true);
+        return new Promise(function (release) { releaseLockFn = release; });
+      }).catch(function () { resolve(true); });
+    });
+  }
+
+  function releaseExamLock() {
+    if (releaseLockFn) {
+      releaseLockFn();
+      releaseLockFn = null;
+    }
+  }
+
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', function () { wakeLock = null; });
+      }
+    } catch (e) { /* tidak didukung atau ditolak: abaikan */ }
+  }
+
+  function releaseWakeLock() {
+    try { if (wakeLock) wakeLock.release(); } catch (e) { /* abaikan */ }
+    wakeLock = null;
+  }
 
   /* =========================================================
    * DATA
@@ -110,6 +163,28 @@ const Exam = (function () {
     return { ok: true, exam: exam };
   }
 
+  function timerStateFor(a, lastSeen) {
+    if (a.mode === 'PER_SOAL') {
+      return {
+        attempt_id: a.attempt_id,
+        mode: 'PER_SOAL',
+        question_index: a.current_index,
+        question_number: a.current_index + 1,
+        question_id: a.question_order[a.current_index],
+        question_started_at: a.question_started_at_ms,
+        question_end_at: a.question_end_at_ms,
+        last_seen_at: lastSeen
+      };
+    }
+    return {
+      attempt_id: a.attempt_id,
+      mode: 'TOTAL',
+      exam_started_at: a.started_at_ms,
+      exam_end_at: a.end_at_ms,
+      last_seen_at: lastSeen
+    };
+  }
+
   async function createAttempt(user, exam) {
     const cfg = exam.exam_raw;
     const perQ = cfg.mode === 'PER_SOAL';
@@ -117,7 +192,7 @@ const Exam = (function () {
     if (qs.length !== exam.question_count_local) throw new Error('Jumlah soal di perangkat tidak lengkap. Unduh ulang.');
 
     const order = Questions.buildOrder(qs, !!cfg.random_question, !!cfg.random_option);
-    const nowMs = Date.now();
+    const nowMs = Timer.now();
     const nowIso = new Date(nowMs).toISOString();
     const durMs = cfg.duration_seconds * 1000;
 
@@ -135,10 +210,11 @@ const Exam = (function () {
       sync_status: 'PENDING',
       started_at: nowIso,
       started_at_ms: nowMs,
-      end_at_ms: perQ ? null : nowMs + durMs,                 // TOTAL: satu batas waktu
-      question_started_at_ms: perQ ? nowMs : null,            // PER_SOAL: batas waktu soal aktif
+      end_at_ms: perQ ? null : nowMs + durMs,
+      question_started_at_ms: perQ ? nowMs : null,
       question_end_at_ms: perQ ? nowMs + durMs : null,
       question_log: [],
+      clock_events: [],
       completed_at: null,
       completed_at_ms: null,
       finish_reason: null,
@@ -153,25 +229,7 @@ const Exam = (function () {
       created_at: nowIso,
       updated_at: nowIso
     };
-
-    const timer = perQ
-      ? {
-          attempt_id: attempt.attempt_id,
-          mode: 'PER_SOAL',
-          question_index: 0,
-          question_number: 1,
-          question_id: order.question_order[0],
-          question_started_at: nowMs,
-          question_end_at: attempt.question_end_at_ms,
-          last_seen_at: nowMs
-        }
-      : {
-          attempt_id: attempt.attempt_id,
-          mode: 'TOTAL',
-          exam_started_at: nowMs,
-          exam_end_at: attempt.end_at_ms,
-          last_seen_at: nowMs
-        };
+    const timer = timerStateFor(attempt, nowMs);
 
     await DB.transaction(['attempts', 'timer_state'], 'readwrite', function (t, set, failTx) {
       const req = t.objectStore('attempts').index('user_exam').getAll([user.user_id, exam.exam_id]);
@@ -189,11 +247,8 @@ const Exam = (function () {
   }
 
   /**
-   * Simpan satu jawaban. Ditolak jika:
-   *  - ujian sudah ditutup,
-   *  - waktu sudah habis (TOTAL: waktu ujian; PER_SOAL: waktu soal),
-   *  - PER_SOAL: soal ini bukan soal yang sedang aktif (sudah terkunci).
-   * clickedAt = waktu siswa mengetuk (toleransi SAVE_GRACE_MS untuk proses simpan).
+   * Simpan satu jawaban. Ditolak jika ujian ditutup, waktu habis,
+   * atau (PER_SOAL) soal ini bukan soal yang sedang aktif.
    */
   function saveAnswerToDb(attemptId, q, original, display, clickedAt) {
     return DB.transaction(['attempts', 'answers'], 'readwrite', function (t, set, failTx) {
@@ -204,7 +259,7 @@ const Exam = (function () {
 
         const perQ = a.mode === 'PER_SOAL';
         const deadline = perQ ? a.question_end_at_ms : a.end_at_ms;
-        const now = Date.now();
+        const now = Timer.now();
 
         if (perQ && a.question_order[a.current_index] !== q.question_id) {
           failTx('QUESTION_LOCKED', 'Soal ini sudah dikunci.');
@@ -224,8 +279,8 @@ const Exam = (function () {
           exam_id: a.exam_id,
           question_number: q.original_number,
           display_number: q.display_number,
-          answer: original,          // huruf ASLI (dipakai server untuk menilai)
-          display_letter: display,   // huruf yang tampil di layar (untuk audit)
+          answer: original,
+          display_letter: display,
           answered_at: new Date(clickedAt).toISOString()
         };
         t.objectStore('answers').put(rec);
@@ -237,7 +292,6 @@ const Exam = (function () {
     });
   }
 
-  /** Mode TOTAL: mengingat soal yang sedang dibuka. */
   function persistPosition() {
     if (!S || isPerQ()) return;
     const id = S.attempt.attempt_id;
@@ -256,11 +310,7 @@ const Exam = (function () {
     }).catch(function (e) { console.warn('Gagal menyimpan posisi soal:', e); });
   }
 
-  /**
-   * Mode PER_SOAL: kunci soal aktif dan buka soal berikutnya.
-   * Ditolak jika waktu soal aktif BELUM habis.
-   * Aman dipanggil berulang (jika sudah dipindah, data terbaru dikembalikan).
-   */
+  /** PER_SOAL: kunci soal aktif dan buka soal berikutnya. Ditolak jika waktu soal belum habis. */
   function advanceQuestion(attemptId, expectedIndex) {
     return DB.transaction(['attempts', 'timer_state'], 'readwrite', function (t, set, failTx) {
       const r = t.objectStore('attempts').get(attemptId);
@@ -272,7 +322,7 @@ const Exam = (function () {
         }
         if (a.current_index !== expectedIndex) { set(a); return; }
 
-        const now = Date.now();
+        const now = Timer.now();
         if (now < a.question_end_at_ms) { failTx('NOT_YET', 'Waktu soal ini belum habis.'); return; }
         if (expectedIndex >= a.question_order.length - 1) { failTx('LAST_QUESTION', 'Ini soal terakhir.'); return; }
 
@@ -292,16 +342,7 @@ const Exam = (function () {
         a.updated_at = new Date(now).toISOString();
 
         t.objectStore('attempts').put(a);
-        t.objectStore('timer_state').put({
-          attempt_id: a.attempt_id,
-          mode: 'PER_SOAL',
-          question_index: a.current_index,
-          question_number: a.current_question,
-          question_id: a.question_order[a.current_index],
-          question_started_at: a.question_started_at_ms,
-          question_end_at: a.question_end_at_ms,
-          last_seen_at: now
-        });
+        t.objectStore('timer_state').put(timerStateFor(a, now));
         set(a);
       };
     });
@@ -317,9 +358,9 @@ const Exam = (function () {
       r.onsuccess = function () {
         const a = r.result;
         if (!a) { failTx('NOT_FOUND', 'Data ujian tidak ditemukan.'); return; }
-        if (a.status !== 'IN_PROGRESS') { set(a); return; } // sudah selesai sebelumnya
+        if (a.status !== 'IN_PROGRESS') { set(a); return; }
 
-        const now = Date.now();
+        const now = Timer.now();
         a.status = 'COMPLETED';
 
         if (a.mode === 'PER_SOAL') {
@@ -327,16 +368,19 @@ const Exam = (function () {
           a.completed_at_ms = (reason === 'ALL_DONE') ? Math.min(now, qEnd) : now;
           a.finish_reason = reason;
           a.question_log = a.question_log || [];
-          a.question_log.push({
-            index: a.current_index,
-            question_id: a.question_order[a.current_index],
-            started_at_ms: a.question_started_at_ms,
-            end_at_ms: a.question_end_at_ms,
-            locked_at_ms: now
-          });
+          if (Array.isArray(a.question_order) && a.question_order[a.current_index]) {
+            a.question_log.push({
+              index: a.current_index,
+              question_id: a.question_order[a.current_index],
+              started_at_ms: a.question_started_at_ms,
+              end_at_ms: a.question_end_at_ms,
+              locked_at_ms: now
+            });
+          }
         } else {
-          a.completed_at_ms = Math.min(now, a.end_at_ms);
-          a.finish_reason = (now >= a.end_at_ms) ? 'TIME_UP' : reason;
+          const end = (a.end_at_ms > 0) ? a.end_at_ms : now;
+          a.completed_at_ms = Math.min(now, end);
+          a.finish_reason = (reason !== 'DATA_ERROR' && now >= end) ? 'TIME_UP' : reason;
         }
 
         a.completed_at = new Date(a.completed_at_ms).toISOString();
@@ -361,13 +405,47 @@ const Exam = (function () {
     });
   }
 
-  /** Mencatat "terakhir terlihat" berkala (dipakai Phase 7 untuk deteksi jam diubah). */
+  /* ---------- Catatan kejadian jam ---------- */
+
+  function recordClockEvent(attemptId, ev) {
+    return DB.transaction(['attempts'], 'readwrite', function (t, set) {
+      const r = t.objectStore('attempts').get(attemptId);
+      r.onsuccess = function () {
+        const a = r.result;
+        if (a && a.status === 'IN_PROGRESS') {
+          a.clock_events = a.clock_events || [];
+          if (a.clock_events.length < MAX_CLOCK_EVENTS) {
+            a.clock_events.push({
+              type: ev.type,
+              amount_ms: ev.amount_ms,
+              effective_at: new Date(ev.effective_at).toISOString(),
+              device_at: new Date(ev.device_at).toISOString()
+            });
+            t.objectStore('attempts').put(a);
+          }
+        }
+        set(true);
+      };
+    }).catch(function (e) { console.warn('Gagal mencatat kejadian jam:', e); });
+  }
+
+  function onClockAnomaly(ev) {
+    if (!S || S.finishing) return;
+    recordClockEvent(S.attempt.attempt_id, ev);
+    if (ev.type === 'CLOCK_BACKWARD') {
+      showNotice('Jam perangkat terdeteksi diubah mundur. Waktu ujian tetap dihitung dengan benar, ' +
+                 'dan kejadian ini dicatat untuk guru.', 'warn');
+    }
+  }
+
+  /* ---------- Detak "terakhir terlihat" ---------- */
+
   async function beat() {
     if (!S) return;
     try {
       const ts = await DB.get('timer_state', S.attempt.attempt_id);
       if (ts) {
-        ts.last_seen_at = Date.now();
+        ts.last_seen_at = Timer.now();
         await DB.put('timer_state', ts);
       }
     } catch (e) {
@@ -384,6 +462,115 @@ const Exam = (function () {
   function stopHeartbeat() {
     if (heartbeatHandle) clearInterval(heartbeatHandle);
     heartbeatHandle = null;
+  }
+
+  /* =========================================================
+   * PEMERIKSAAN & PERBAIKAN
+   * ========================================================= */
+
+  /**
+   * Memeriksa attempt sebelum dilanjutkan. Melempar DATA_BROKEN jika tidak bisa diperbaiki.
+   * timer_state yang hilang/tidak cocok dibuat ulang dari attempt (attempt = sumber kebenaran).
+   */
+  async function checkAndRepairAttempt(a) {
+    const problems = [];
+    const N = Array.isArray(a.question_order) ? a.question_order.length : 0;
+    if (!N) problems.push('urutan soal hilang');
+    if (!a.option_orders || typeof a.option_orders !== 'object') problems.push('urutan pilihan hilang');
+    if (!(a.started_at_ms > 0)) problems.push('waktu mulai hilang');
+
+    if (a.mode === 'TOTAL') {
+      const expected = a.started_at_ms + a.duration_seconds * 1000;
+      if (!(a.end_at_ms > 0) || Math.abs(a.end_at_ms - expected) > 1000) {
+        problems.push('batas waktu ujian tidak cocok dengan durasi');
+      }
+    } else if (a.mode === 'PER_SOAL') {
+      if (!(a.current_index >= 0 && a.current_index < N)) problems.push('nomor soal aktif tidak valid');
+      const len = a.question_end_at_ms - a.question_started_at_ms;
+      if (!(a.per_question_seconds > 0) || !(Math.abs(len - a.per_question_seconds * 1000) <= 1000)) {
+        problems.push('waktu soal aktif tidak cocok');
+      }
+    } else {
+      problems.push('mode tidak dikenal');
+    }
+    if (problems.length) throw makeError('DATA_BROKEN', problems.join('; '));
+
+    const ts = await DB.get('timer_state', a.attempt_id);
+    const lastSeen = Math.max(
+      (ts && ts.last_seen_at) || 0,
+      a.started_at_ms || 0,
+      a.question_started_at_ms || 0,
+      Date.parse(a.updated_at) || 0,
+      Date.parse(a.last_answer_at) || 0
+    );
+
+    const mismatch = !ts || ts.mode !== a.mode ||
+      (a.mode === 'TOTAL'
+        ? ts.exam_end_at !== a.end_at_ms
+        : (ts.question_index !== a.current_index || ts.question_end_at !== a.question_end_at_ms));
+
+    if (mismatch) await DB.put('timer_state', timerStateFor(a, lastSeen));
+    return { lastSeen: lastSeen, repaired: mismatch };
+  }
+
+  /** Data ujian rusak: tawarkan menutup ujian dengan jawaban yang sudah tersimpan tetap aman. */
+  async function handleBroken(a, e) {
+    releaseExamLock();
+    const ok = window.confirm(
+      'Data ujian "' + a.exam_name + '" di perangkat ini rusak sehingga ujian tidak dapat dilanjutkan.\n\n' +
+      'Penyebab: ' + (e && e.message ? e.message : e) + '\n\n' +
+      'Tekan OK untuk MENUTUP ujian dan menyimpan jawaban yang sudah ada agar tetap bisa dikirim ke server.\n' +
+      'Tekan Batal untuk kembali ke beranda (ujian tetap terbuka).');
+    if (!ok) throw makeError('DATA_BROKEN', 'Ujian tidak dapat dilanjutkan: ' + (e && e.message ? e.message : e));
+    const done = await finishAttempt(a.attempt_id, 'DATA_ERROR');
+    showDone(done, 'Ujian ditutup karena data di perangkat rusak. Jawaban yang sudah tersimpan tetap disimpan dan akan dikirim ke server.');
+    return false;
+  }
+
+  /**
+   * Dijalankan saat aplikasi dibuka:
+   *  - ujian selesai yang belum masuk antrean kirim dimasukkan kembali,
+   *  - sisa timer_state milik ujian yang sudah selesai dihapus.
+   */
+  async function repair() {
+    let fixed = 0;
+    const attempts = await DB.getAll('attempts');
+    const queue = await DB.getAll('sync_queue');
+    const inQueue = {};
+    queue.forEach(function (q) { inQueue[q.attempt_id] = true; });
+
+    for (let i = 0; i < attempts.length; i++) {
+      const a = attempts[i];
+      if (a.status === 'COMPLETED' && a.sync_status !== 'SYNCED') {
+        if (a.sync_status !== 'PENDING_SYNC') {
+          a.sync_status = 'PENDING_SYNC';
+          await DB.put('attempts', a);
+          fixed++;
+        }
+        if (!inQueue[a.attempt_id]) {
+          await DB.put('sync_queue', {
+            queue_id: a.attempt_id,
+            attempt_id: a.attempt_id,
+            user_id: a.user_id,
+            exam_id: a.exam_id,
+            status: 'PENDING',
+            tries: 0,
+            created_at: new Date().toISOString(),
+            last_error: null
+          });
+          fixed++;
+        }
+      }
+      if (a.status !== 'IN_PROGRESS') {
+        const ts = await DB.get('timer_state', a.attempt_id);
+        if (ts) {
+          await DB.del('timer_state', a.attempt_id);
+          fixed++;
+        }
+      }
+    }
+    if (fixed) console.info('SIBER-UJIAN: ' + fixed + ' perbaikan data dilakukan saat aplikasi dibuka.');
+    return fixed;
   }
 
   /* =========================================================
@@ -429,12 +616,14 @@ const Exam = (function () {
       'Setiap jawaban langsung tersimpan di perangkat saat dipilih.',
       'Jika aplikasi tertutup atau HP mati, waktu soal yang sedang dibuka tetap berjalan. ' +
         'Jika waktunya habis saat tertutup, soal itu dikunci dan soal berikutnya dimulai saat aplikasi dibuka lagi.',
+      'Mengubah jam HP tidak menambah waktu, dan akan dicatat untuk guru.',
       'Ujian selesai otomatis setelah waktu soal terakhir habis.',
       'Internet tidak diperlukan selama ujian.'
     ] : [
       'Waktu mulai berjalan saat Anda menekan "Mulai ujian sekarang" dan TIDAK berhenti walaupun aplikasi ditutup atau HP mati.',
       'Setiap jawaban langsung tersimpan di perangkat saat dipilih.',
       'Anda boleh berpindah soal, kembali ke soal sebelumnya, dan mengganti jawaban selama waktu masih ada.',
+      'Mengubah jam HP tidak menambah waktu, dan akan dicatat untuk guru.',
       'Jika waktu habis, ujian selesai otomatis.',
       'Ujian yang sudah selesai tidak dapat dibuka kembali.',
       'Internet tidak diperlukan selama ujian.'
@@ -461,12 +650,23 @@ const Exam = (function () {
     const btn = $('btn-intro-start');
     UI.setBusy(btn, true, 'Menyiapkan ujian...');
     try {
-      const attempt = await createAttempt(pendingIntro.user, pendingIntro.exam);
+      if (!(await acquireExamLock())) {
+        UI.showMsg('intro-message', 'error',
+          'Ada ujian yang sedang terbuka di tab atau jendela lain. Tutup tab lain tersebut terlebih dahulu.');
+        return;
+      }
+      let attempt;
+      try {
+        attempt = await createAttempt(pendingIntro.user, pendingIntro.exam);
+      } catch (e) {
+        releaseExamLock();
+        throw e;
+      }
       pendingIntro = null;
       await enterExam(attempt);
     } catch (e) {
       if (e && e.code === 'ALREADY_EXISTS') {
-        const running = await findInProgress(pendingIntro.user.user_id);
+        const running = pendingIntro ? await findInProgress(pendingIntro.user.user_id) : null;
         pendingIntro = null;
         if (running) {
           await resume(running);
@@ -492,26 +692,34 @@ const Exam = (function () {
    * ========================================================= */
 
   async function enterExam(attempt) {
-    const questions = await Questions.buildForAttempt(attempt);
-    const saved = await DB.getAllByIndex('answers', 'attempt_id', attempt.attempt_id);
-    const answers = {};
-    saved.forEach(function (a) { answers[a.question_id] = a; });
+    if (!(await acquireExamLock())) {
+      throw makeError('OTHER_TAB', 'Ujian sedang terbuka di tab atau jendela lain. Tutup tab lain tersebut, lalu muat ulang halaman ini.');
+    }
+    try {
+      const questions = await Questions.buildForAttempt(attempt);
+      const saved = await DB.getAllByIndex('answers', 'attempt_id', attempt.attempt_id);
+      const answers = {};
+      saved.forEach(function (a) { answers[a.question_id] = a; });
 
-    let index = Number(attempt.current_index) || 0;
-    if (index < 0 || index >= questions.length) index = 0;
+      let index = Number(attempt.current_index) || 0;
+      if (index < 0 || index >= questions.length) index = 0;
 
-    S = {
-      attempt: attempt,
-      questions: questions,
-      answers: answers,
-      index: index,
-      saving: 0,
-      saveError: null,
-      finishing: false,
-      advancing: false,
-      imageUrl: null,
-      pendingSeq: {}
-    };
+      S = {
+        attempt: attempt,
+        questions: questions,
+        answers: answers,
+        index: index,
+        saving: 0,
+        saveError: null,
+        finishing: false,
+        advancing: false,
+        imageUrl: null,
+        pendingSeq: {}
+      };
+    } catch (e) {
+      releaseExamLock();
+      throw e;
+    }
 
     try { history.pushState({ siberExam: true }, ''); } catch (e) { /* abaikan */ }
     UI.hideMsg('exam-notice');
@@ -520,40 +728,85 @@ const Exam = (function () {
     render();
     startTimer();
     startHeartbeat();
+    requestWakeLock();
+    DB.requestPersistence();
+  }
+
+  /** Masuk ujian; jika data rusak, tawarkan penutupan aman. true jika berhasil masuk. */
+  async function enterSafely(a) {
+    try {
+      await enterExam(a);
+      return true;
+    } catch (e) {
+      if (e && e.code === 'OTHER_TAB') throw e;
+      return handleBroken(a, e);
+    }
   }
 
   async function resume(a) {
+    let info;
+    try {
+      info = await checkAndRepairAttempt(a);
+    } catch (e) {
+      return handleBroken(a, e);
+    }
+
+    const notes = [];
+    let noticeType = 'info';
+
+    const back = Timer.ensureAtLeast(info.lastSeen);
+    if (back > RESUME_BACKWARD_TOLERANCE_MS) {
+      await recordClockEvent(a.attempt_id, {
+        type: 'CLOCK_BACKWARD_WHILE_CLOSED',
+        amount_ms: back,
+        effective_at: Timer.now(),
+        device_at: Date.now()
+      });
+      notes.push('Jam perangkat lebih mundur dari saat aplikasi terakhir dibuka. Waktu tidak ditambah, dan kejadian ini dicatat untuk guru.');
+      noticeType = 'warn';
+    } else {
+      const gap = Timer.now() - info.lastSeen;
+      if (gap > CLOSED_GAP_REPORT_MS) {
+        await recordClockEvent(a.attempt_id, {
+          type: 'APP_CLOSED_GAP',
+          amount_ms: gap,
+          effective_at: Timer.now(),
+          device_at: Date.now()
+        });
+      }
+    }
+    if (info.repaired) notes.push('Data timer diperbaiki otomatis dari catatan ujian.');
+
     if (a.mode === 'TOTAL') {
-      if (Date.now() >= a.end_at_ms) {
+      if (Timer.now() >= a.end_at_ms) {
         const done = await finishAttempt(a.attempt_id, 'TIME_UP');
         showDone(done, 'Waktu ujian habis saat aplikasi tertutup. Ujian diselesaikan otomatis; jawaban yang sudah tersimpan tetap dihitung.');
         return;
       }
-      await enterExam(a);
-      showNotice('Ujian dilanjutkan. Jawaban sebelumnya sudah dimuat. Waktu tetap berjalan selama aplikasi tertutup.');
-      return;
-    }
-
-    if (a.mode === 'PER_SOAL') {
-      let at = a;
-      let note = 'Ujian dilanjutkan. Waktu soal ini tetap berjalan selama aplikasi tertutup.';
-      if (Date.now() >= at.question_end_at_ms) {
-        const lockedNumber = at.current_index + 1;
-        if (at.current_index >= at.question_order.length - 1) {
-          const done = await finishAttempt(at.attempt_id, 'ALL_DONE');
-          showDone(done, 'Waktu soal terakhir habis saat aplikasi tertutup. Ujian selesai; jawaban yang sudah tersimpan tetap dihitung.');
-          return;
-        }
-        at = await advanceQuestion(at.attempt_id, at.current_index);
-        note = 'Waktu soal ' + lockedNumber + ' habis saat aplikasi tertutup, jadi soal itu dikunci. ' +
-               'Soal ' + (at.current_index + 1) + ' dimulai sekarang.';
+      if (await enterSafely(a)) {
+        showNotice(['Ujian dilanjutkan. Jawaban sebelumnya sudah dimuat. Waktu tetap berjalan selama aplikasi tertutup.']
+          .concat(notes).join(' '), noticeType);
       }
-      await enterExam(at);
-      showNotice(note);
       return;
     }
 
-    throw new Error('Mode ' + a.mode + ' tidak dikenal.');
+    // PER_SOAL
+    let at = a;
+    let first = 'Ujian dilanjutkan. Waktu soal ini tetap berjalan selama aplikasi tertutup.';
+    if (Timer.now() >= at.question_end_at_ms) {
+      const lockedNumber = at.current_index + 1;
+      if (at.current_index >= at.question_order.length - 1) {
+        const done = await finishAttempt(at.attempt_id, 'ALL_DONE');
+        showDone(done, 'Waktu soal terakhir habis saat aplikasi tertutup. Ujian selesai; jawaban yang sudah tersimpan tetap dihitung.');
+        return;
+      }
+      at = await advanceQuestion(at.attempt_id, at.current_index);
+      first = 'Waktu soal ' + lockedNumber + ' habis saat aplikasi tertutup, jadi soal itu dikunci. ' +
+              'Soal ' + (at.current_index + 1) + ' dimulai sekarang.';
+    }
+    if (await enterSafely(at)) {
+      showNotice([first].concat(notes).join(' '), noticeType);
+    }
   }
 
   /* =========================================================
@@ -584,12 +837,11 @@ const Exam = (function () {
 
   function current() { return S.questions[S.index]; }
 
-  /** PER_SOAL: soal aktif terkunci jika waktunya habis atau sedang pindah soal. */
   function isLocked() {
     if (!S) return true;
     if (S.finishing) return true;
     if (!isPerQ()) return false;
-    return S.advancing || Date.now() >= S.attempt.question_end_at_ms;
+    return S.advancing || Timer.now() >= S.attempt.question_end_at_ms;
   }
 
   function displayLetterOf(q, original) {
@@ -713,28 +965,26 @@ const Exam = (function () {
     });
   }
 
-  function showNotice(text) {
-    UI.showMsg('exam-notice', 'info', text);
+  function showNotice(text, type) {
+    UI.showMsg('exam-notice', type || 'info', text);
     if (noticeHandle) clearTimeout(noticeHandle);
-    noticeHandle = setTimeout(function () { UI.hideMsg('exam-notice'); }, 8000);
+    noticeHandle = setTimeout(function () { UI.hideMsg('exam-notice'); }, 10000);
   }
 
   /* =========================================================
    * WAKTU HABIS
    * ========================================================= */
 
-  /** TOTAL: waktu ujian habis. */
   function onTimeUp() {
     finish('TIME_UP');
   }
 
-  /** PER_SOAL: waktu soal aktif habis -> kunci, lalu buka soal berikutnya (atau selesai). */
   async function onQuestionTimeUp() {
     if (!S || S.finishing || S.advancing) return;
     S.advancing = true;
     renderAll();
 
-    await saveChain; // pastikan jawaban terakhir sudah tersimpan sebelum soal dikunci
+    await saveChain;
     if (!S) return;
 
     const idx = S.index;
@@ -759,7 +1009,7 @@ const Exam = (function () {
       if (!S) return;
       S.advancing = false;
       if (e && e.code === 'NOT_YET') {
-        startTimer(); // jam berubah mundur; ikuti waktu yang tersimpan
+        startTimer();
         return;
       }
       S.saveError = 'Gagal membuka soal berikutnya: ' + (e && e.message ? e.message : e) + ' Mencoba lagi...';
@@ -774,7 +1024,7 @@ const Exam = (function () {
 
   function queueSave(q, original, display) {
     if (!S || isLocked()) return;
-    const clickedAt = Date.now();
+    const clickedAt = Timer.now();
     const attemptId = S.attempt.attempt_id;
     const qid = q.question_id;
     const seq = ++saveSeq;
@@ -886,7 +1136,7 @@ const Exam = (function () {
     UI.setBusy($('btn-confirm-yes'), true, 'Menyimpan...');
     render();
 
-    await saveChain; // tunggu semua jawaban selesai tersimpan
+    await saveChain;
 
     let done;
     try {
@@ -898,7 +1148,7 @@ const Exam = (function () {
       S.saveError = 'Gagal menyimpan status selesai: ' + e.message;
       UI.showScreen('exam');
       render();
-      const timeIsUp = isPerQ() || Date.now() >= S.attempt.end_at_ms;
+      const timeIsUp = isPerQ() || Timer.now() >= S.attempt.end_at_ms;
       if (timeIsUp) {
         setTimeout(function () { finish(reason); }, 5000);
       } else {
@@ -918,6 +1168,10 @@ const Exam = (function () {
     if (a.finish_reason === 'TIME_UP') defaultNote = 'Waktu habis. Ujian diselesaikan otomatis.';
     if (a.finish_reason === 'ALL_DONE') defaultNote = 'Waktu soal terakhir habis. Ujian selesai.';
 
+    const backward = (a.clock_events || []).filter(function (e) {
+      return e.type === 'CLOCK_BACKWARD' || e.type === 'CLOCK_BACKWARD_WHILE_CLOSED';
+    }).length;
+
     $('done-message').textContent = note || defaultNote;
     UI.setRows('done-info', [
       ['Ujian', a.exam_name],
@@ -925,6 +1179,7 @@ const Exam = (function () {
       ['Selesai pada', UI.formatDateTime(a.completed_at)],
       ['Cara selesai', REASON_TEXT[a.finish_reason] || a.finish_reason],
       ['Terjawab', a.answered_count + ' dari ' + N],
+      ['Catatan jam', backward ? backward + ' kali jam perangkat diubah mundur (dicatat)' : 'Tidak ada'],
       ['Status pengiriman', a.sync_status === 'SYNCED' ? 'Sudah terkirim' : 'Menunggu dikirim (PENDING_SYNC)'],
       ['Kode attempt', a.attempt_id]
     ]);
@@ -936,6 +1191,8 @@ const Exam = (function () {
     S = null;
     Timer.stop();
     stopHeartbeat();
+    releaseWakeLock();
+    releaseExamLock();
   }
 
   /* =========================================================
@@ -944,6 +1201,7 @@ const Exam = (function () {
 
   function onBeforeUnload(event) {
     if (S && !S.finishing) {
+      beat();
       event.preventDefault();
       event.returnValue = '';
     }
@@ -958,8 +1216,12 @@ const Exam = (function () {
 
   function onVisibility() {
     if (!S) return;
-    if (document.visibilityState === 'visible') Timer.tickNow();
-    else beat();
+    if (document.visibilityState === 'visible') {
+      Timer.tickNow();
+      requestWakeLock();
+    } else {
+      beat();
+    }
   }
 
   /* =========================================================
@@ -980,11 +1242,15 @@ const Exam = (function () {
     $('btn-confirm-yes').addEventListener('click', function () { finish('MANUAL'); });
     $('btn-done-home').addEventListener('click', function () { if (hooks.onExit) hooks.onExit(); });
     window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('pagehide', function () { beat(); });
     window.addEventListener('popstate', onPopState);
     document.addEventListener('visibilitychange', onVisibility);
+    document.addEventListener('freeze', function () { beat(); });
+    Timer.onAnomaly(onClockAnomaly);
+
+    repair().catch(function (e) { console.warn('Pemeriksaan data saat dibuka gagal:', e); });
   }
 
-  /** Dipanggil setelah login/pemulihan. Jika ada ujian berjalan, langsung dilanjutkan. */
   async function resumeIfAny(user) {
     if (!user || user.role !== 'STUDENT') return false;
     const a = await findInProgress(user.user_id);
