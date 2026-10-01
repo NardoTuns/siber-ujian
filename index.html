@@ -80,7 +80,11 @@
 
       <div class="card">
         <h3>Daftar ujian</h3>
-        <button type="button" id="btn-load-exams" class="btn btn-primary btn-block">Perbarui daftar ujian</button>
+        <p class="small">Unduh soal saat ada internet (di rumah). Ujian hanya bisa dikerjakan jika berstatus READY.</p>
+        <div class="btn-row">
+          <button type="button" id="btn-load-exams" class="btn btn-light">Perbarui daftar ujian</button>
+          <button type="button" id="btn-download-all" class="btn btn-primary">Unduh semua ujian</button>
+        </div>
         <div id="home-message" class="msg" hidden></div>
         <div id="exam-list"></div>
       </div>
@@ -97,7 +101,7 @@
 
       <div class="card danger-zone">
         <h3>Khusus pengujian</h3>
-        <p class="small">Menghapus SEMUA data aplikasi di perangkat ini (akun tersimpan, daftar ujian, pengaturan).
+        <p class="small">Menghapus SEMUA data aplikasi di perangkat ini (akun tersimpan, soal, pengaturan).
           Jangan dipakai setelah ujian sungguhan dimulai.</p>
         <button type="button" id="btn-wipe" class="btn btn-danger btn-block">Hapus semua data lokal</button>
       </div>
