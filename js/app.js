@@ -1,7 +1,7 @@
 /**
  * SIBER-UJIAN — app.js
- * Mengatur login, beranda, daftar ujian, unduh soal, dan penyimpanan.
- * Layar ujian diatur oleh exam.js.
+ * Mengatur login, beranda, daftar ujian, unduh soal, pengiriman hasil, dan penyimpanan.
+ * Layar ujian diatur oleh exam.js. Pengiriman hasil diatur oleh submit.js.
  */
 (function () {
   'use strict';
@@ -39,6 +39,8 @@
     const arah = ms > 0 ? 'terlambat' : 'terlalu cepat';
     return 'PERIKSA: jam perangkat ' + arah + ' sekitar ' + Math.round(sec / 60) + ' menit';
   }
+
+  function isHomeVisible() { return !$('screen-home').hidden; }
 
   /* ---------- Nama sekolah ---------- */
 
@@ -97,6 +99,10 @@
       pw.focus();
       return;
     }
+
+    // Login online memperbarui sesi -> hasil yang menunggu bisa langsung dikirim
+    if (res.data.mode === 'ONLINE') Submit.run({ manual: true });
+
     if (await tryResume()) return;
 
     await renderHome();
@@ -153,7 +159,7 @@
     if (!s.session_valid) {
       UI.showMsg('session-message', 'warn',
         'Sesi server sudah habis. Anda tetap bisa memakai data di perangkat. ' +
-        'Untuk mengunduh soal, tekan Keluar lalu login lagi saat ada internet.');
+        'Untuk mengunduh soal atau mengirim hasil, tekan Keluar lalu login lagi saat ada internet.');
     } else {
       UI.hideMsg('session-message');
     }
@@ -164,9 +170,117 @@
     if (!s) { UI.showScreen('login'); return; }
     renderAccount();
     UI.hideMsg('home-message');
+    await renderResults();
     await showLocalExams();
     await renderStorage();
   }
+
+  /* ---------- Hasil ujian (kirim ke server) ---------- */
+
+  function badge(text, cls) { return el('span', { className: 'badge ' + (cls || ''), text: text }); }
+
+  function resultStatusView(a, item) {
+    if (a.sync_status === 'SYNCED') {
+      let text = 'Terkirim ke server pada ' + UI.formatDateTime(a.synced_at) + '.';
+      if (a.server_score !== undefined && a.server_score !== null) {
+        text += ' Nilai: ' + a.server_score + ' (benar ' + a.server_correct + ', salah ' + a.server_wrong + ').';
+      }
+      return { badge: badge('TERKIRIM', 'badge-done'), text: text, type: 'ok' };
+    }
+    const st = item ? item.status : 'PENDING';
+    if (st === 'SENDING') {
+      return { badge: badge('SEDANG DIKIRIM', 'badge-warn'), text: 'Sedang dikirim ke server...', type: 'info' };
+    }
+    if (st === 'NEED_LOGIN') {
+      return { badge: badge('PERLU LOGIN ONLINE', 'badge-warn'), text: item.last_error || 'Login online untuk mengirim.', type: 'warn' };
+    }
+    if (st === 'FAILED') {
+      return {
+        badge: badge('GAGAL - HUBUNGI GURU', 'badge-warn'),
+        text: (item.last_error || 'Ditolak server.') +
+              ' Data tetap aman di perangkat. Setelah guru memperbaiki, tekan "Kirim hasil sekarang".',
+        type: 'error'
+      };
+    }
+    let text = 'Menunggu dikirim. Akan dikirim otomatis saat ada internet.';
+    if (item && item.last_error) {
+      text += ' Percobaan terakhir: ' + item.last_error;
+      if (item.next_try_at) text += ' Dicoba lagi sekitar pukul ' + UI.formatClock(new Date(item.next_try_at).toISOString()) + '.';
+    }
+    return { badge: badge('MENUNGGU DIKIRIM', 'badge-warn'), text: text, type: 'warn' };
+  }
+
+  async function renderResults() {
+    const s = Auth.getState();
+    if (!s) return;
+    let data;
+    try {
+      data = await Submit.listForUser(s.user.user_id);
+    } catch (e) {
+      UI.showMsg('results-message', 'error', 'Gagal membaca hasil di perangkat: ' + e.message);
+      return;
+    }
+    const list = $('results-list');
+    list.replaceChildren();
+
+    if (!data.mine.length) {
+      list.appendChild(el('p', { className: 'small', text: 'Belum ada hasil ujian milik akun ini di perangkat.' }));
+    }
+    data.mine.forEach(function (row) {
+      const a = row.attempt;
+      const v = resultStatusView(a, row.item);
+      list.appendChild(el('div', { className: 'exam-card' }, [
+        el('h4', { text: a.exam_name }),
+        el('div', { className: 'exam-meta', text: 'Selesai ' + UI.formatDateTime(a.completed_at) +
+          ' | Terjawab ' + a.answered_count + ' dari ' + (a.question_order || []).length }),
+        el('div', null, [v.badge]),
+        el('div', { className: 'msg msg-' + v.type, text: v.text }),
+        el('div', { className: 'exam-meta', text: 'Kode attempt: ' + a.attempt_id })
+      ]));
+    });
+
+    if (data.othersPending > 0) {
+      list.appendChild(el('div', { className: 'msg msg-info',
+        text: 'Ada ' + data.othersPending + ' hasil milik akun lain di perangkat ini yang belum terkirim. ' +
+              'Hasil tersebut dikirim otomatis selama sesi akun pemiliknya masih berlaku.' }));
+    }
+
+    const btn = $('btn-sync-now');
+    if (Submit.isRunning()) {
+      btn.disabled = true;
+      btn.textContent = 'Sedang mengirim...';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Kirim hasil sekarang';
+    }
+  }
+
+  async function onSyncNow() {
+    UI.hideMsg('results-message');
+    if (!navigator.onLine) {
+      UI.showMsg('results-message', 'warn', 'Perangkat offline. Hasil akan dikirim otomatis saat ada internet.');
+      return;
+    }
+    const r = await Submit.run({ manual: true });
+    refreshDebug();
+    if (r && r.busy) {
+      UI.showMsg('results-message', 'info', 'Pengiriman sedang berjalan (mungkin di tab lain).');
+    } else if (r && r.error) {
+      UI.showMsg('results-message', 'error', 'Terjadi kesalahan: ' + r.error);
+    } else if (r) {
+      const parts = [];
+      if (r.sent) parts.push(r.sent + ' terkirim');
+      if (r.retry) parts.push(r.retry + ' akan dicoba lagi');
+      if (r.need_login) parts.push(r.need_login + ' perlu login online');
+      if (r.failed) parts.push(r.failed + ' gagal');
+      UI.showMsg('results-message', (r.failed || r.need_login || r.retry) ? 'warn' : 'ok',
+        parts.length ? parts.join(', ') + '.' : 'Tidak ada hasil yang perlu dikirim.');
+    }
+    await renderResults();
+    await showLocalExams();
+  }
+
+  /* ---------- Daftar ujian ---------- */
 
   function modeText(e) {
     if (e.mode === 'TOTAL') return 'Mode TOTAL: ' + Math.round(e.duration_seconds / 60) + ' menit untuk seluruh soal';
@@ -193,8 +307,6 @@
     return { ready: false, text: e.last_error ? ('Belum siap: ' + e.last_error) : 'Belum siap. Perlu unduh ulang.' };
   }
 
-  function badge(text, cls) { return el('span', { className: 'badge ' + (cls || ''), text: text }); }
-
   function actionButton(action, label, cls, examId) {
     return el('button', {
       className: 'btn ' + cls,
@@ -217,10 +329,10 @@
       actions.push(actionButton('start', 'Lanjutkan ujian', 'btn-primary', e.exam_id));
     } else if (attempt) {
       const synced = attempt.sync_status === 'SYNCED';
-      badges.push(badge(synced ? 'TERKIRIM' : 'SELESAI - BELUM TERKIRIM', synced ? 'badge-done' : 'badge-warn'));
+      badges.push(badge(synced ? 'SELESAI - TERKIRIM' : 'SELESAI - BELUM TERKIRIM', synced ? 'badge-done' : 'badge-warn'));
       statusText = 'Selesai ' + UI.formatDateTime(attempt.completed_at) + '. Terjawab ' +
         attempt.answered_count + ' dari ' + (attempt.question_order || []).length + '.' +
-        (synced ? '' : ' Hasil akan dikirim saat online (Phase 9).');
+        (synced ? ' Hasil sudah diterima server.' : ' Lihat status pengiriman di bagian "Hasil ujian".');
     } else {
       badges.push(info.ready ? badge('READY', 'badge-done') : badge('BELUM SIAP', 'badge-warn'));
       if (info.ready) {
@@ -232,7 +344,7 @@
       }
     }
 
-    if (submitted === true) badges.push(badge('Sudah ada hasil di server', 'badge-done'));
+    if (submitted === true && !attempt) badges.push(badge('Sudah ada hasil di server', 'badge-done'));
     if (e.random_question) badges.push(badge('Soal diacak'));
     if (e.random_option) badges.push(badge('Pilihan diacak'));
     if (e.token_required) badges.push(badge('Perlu token'));
@@ -339,7 +451,7 @@
       const text = d.status === 'ALREADY_READY'
         ? d.message
         : 'READY. ' + d.question_count + ' soal dan ' + d.image_count + ' gambar (' +
-          UI.formatBytes(d.image_bytes) + ') tersimpan dan terverifikasi.';
+          UI.formatBytes(d.image_bytes) + ') tersimpan dan terverifikasi' + (d.encrypted ? ' (soal terkunci token).' : '.');
       UI.showMsg('home-message', 'ok', examId + ': ' + text);
     } else {
       UI.showMsg('home-message', 'error', examId + ': ' + UI.errorText(res));
@@ -518,6 +630,7 @@
     await renderHome();
     UI.showScreen('home');
     if (message) UI.showMsg('home-message', 'warn', message);
+    if (navigator.onLine) Submit.run();
   }
 
   /* ---------- Mulai ---------- */
@@ -531,6 +644,7 @@
     $('login-form').addEventListener('submit', onLogin);
     $('btn-toggle-password').addEventListener('click', onTogglePassword);
     $('btn-ping').addEventListener('click', onPing);
+    $('btn-sync-now').addEventListener('click', onSyncNow);
     $('btn-load-exams').addEventListener('click', onLoadExams);
     $('btn-download-all').addEventListener('click', onDownloadAll);
     $('exam-list').addEventListener('click', onExamListClick);
@@ -560,6 +674,15 @@
 
     DB.requestPersistence();
     loadSchoolName();
+
+    // Pengiriman otomatis: saat dibuka, saat internet kembali, dan setiap 1 menit
+    Submit.onChange(function () {
+      if (isHomeVisible()) {
+        renderResults();
+        showLocalExams();
+      }
+    });
+    Submit.init();
 
     let restored = null;
     try {
