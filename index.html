@@ -6,6 +6,7 @@
   <title>SIBER-UJIAN</title>
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/login.css">
+  <link rel="stylesheet" href="css/exam.css">
 </head>
 <body>
   <header class="topbar">
@@ -101,9 +102,84 @@
 
       <div class="card danger-zone">
         <h3>Khusus pengujian</h3>
-        <p class="small">Menghapus SEMUA data aplikasi di perangkat ini (akun tersimpan, soal, pengaturan).
+        <p class="small">Menghapus SEMUA data aplikasi di perangkat ini (akun tersimpan, soal, hasil ujian, pengaturan).
           Jangan dipakai setelah ujian sungguhan dimulai.</p>
         <button type="button" id="btn-wipe" class="btn btn-danger btn-block">Hapus semua data lokal</button>
+      </div>
+    </section>
+
+    <!-- LAYAR: Pembuka ujian -->
+    <section id="screen-exam-intro" class="screen" hidden>
+      <div class="card">
+        <h2 id="intro-title"></h2>
+        <table class="info-table"><tbody id="intro-info"></tbody></table>
+        <h4>Aturan</h4>
+        <ul id="intro-rules" class="rules"></ul>
+        <div id="intro-token-note" class="msg msg-warn" hidden></div>
+        <div id="intro-message" class="msg" hidden></div>
+        <button type="button" id="btn-intro-start" class="btn btn-primary btn-block">Mulai ujian sekarang</button>
+        <button type="button" id="btn-intro-back" class="btn btn-light btn-block">Kembali</button>
+      </div>
+    </section>
+
+    <!-- LAYAR: Ujian -->
+    <section id="screen-exam" class="screen" hidden>
+      <div class="card exam-header">
+        <div class="exam-header-row">
+          <div>
+            <div id="exam-title" class="exam-title"></div>
+            <div id="exam-progress" class="small"></div>
+          </div>
+          <div class="timer-box">
+            <div class="small">Sisa waktu</div>
+            <div id="exam-timer" class="timer">--:--</div>
+          </div>
+        </div>
+        <div id="exam-notice" class="msg msg-info" hidden></div>
+      </div>
+
+      <div class="card">
+        <div id="exam-question-text" class="question-text"></div>
+        <img id="exam-question-image" class="question-image" alt="Gambar soal" hidden>
+        <div id="exam-options" class="options"></div>
+        <div id="exam-save-status" class="save-status save-none"></div>
+        <button type="button" id="btn-clear-answer" class="btn btn-light btn-small">Kosongkan jawaban</button>
+      </div>
+
+      <div class="card">
+        <div class="btn-row">
+          <button type="button" id="btn-prev" class="btn btn-light">&larr; Sebelumnya</button>
+          <button type="button" id="btn-next" class="btn btn-primary">Berikutnya &rarr;</button>
+        </div>
+        <h4 class="grid-title">Nomor soal</h4>
+        <div id="exam-grid" class="grid"></div>
+        <p class="small">Kotak biru = sudah dijawab. Bingkai oranye = soal yang sedang dibuka.</p>
+        <button type="button" id="btn-finish" class="btn btn-danger btn-block">Selesai ujian</button>
+      </div>
+    </section>
+
+    <!-- LAYAR: Konfirmasi selesai -->
+    <section id="screen-exam-confirm" class="screen" hidden>
+      <div class="card">
+        <h2>Selesaikan ujian?</h2>
+        <p>Sisa waktu: <strong id="confirm-timer">--:--</strong></p>
+        <table class="info-table"><tbody id="confirm-info"></tbody></table>
+        <div id="confirm-warning" class="msg msg-warn" hidden></div>
+        <p class="small">Setelah diselesaikan, ujian TIDAK dapat dibuka kembali.</p>
+        <button type="button" id="btn-confirm-yes" class="btn btn-danger btn-block">Ya, selesaikan ujian</button>
+        <button type="button" id="btn-confirm-no" class="btn btn-light btn-block">Kembali ke soal</button>
+      </div>
+    </section>
+
+    <!-- LAYAR: Ujian selesai -->
+    <section id="screen-exam-done" class="screen" hidden>
+      <div class="card">
+        <h2>Ujian selesai</h2>
+        <div id="done-message" class="msg msg-ok"></div>
+        <table class="info-table"><tbody id="done-info"></tbody></table>
+        <p class="small">Hasil tersimpan di perangkat dan akan dikirim ke server saat ada internet
+          (fitur kirim dibuat di Phase 9). Jangan hapus data aplikasi atau data browser.</p>
+        <button type="button" id="btn-done-home" class="btn btn-primary btn-block">Kembali ke beranda</button>
       </div>
     </section>
 
@@ -117,10 +193,14 @@
   <footer class="footer" id="footer-version"></footer>
 
   <script src="js/config.js" defer></script>
+  <script src="js/ui.js" defer></script>
   <script src="js/db.js" defer></script>
   <script src="js/api.js" defer></script>
   <script src="js/auth.js" defer></script>
   <script src="js/sync.js" defer></script>
+  <script src="js/timer.js" defer></script>
+  <script src="js/questions.js" defer></script>
+  <script src="js/exam.js" defer></script>
   <script src="js/app.js" defer></script>
 </body>
 </html>
