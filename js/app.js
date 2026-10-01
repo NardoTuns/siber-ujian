@@ -1,75 +1,19 @@
 /**
  * SIBER-UJIAN — app.js
- * Mengatur layar, tombol, dan tampilan.
- * Semua teks dari server/perangkat ditampilkan dengan textContent (aman dari sisipan kode).
- * Teks soal TIDAK ditampilkan sebelum ujian dimulai.
+ * Mengatur login, beranda, daftar ujian, unduh soal, dan penyimpanan.
+ * Layar ujian diatur oleh exam.js.
  */
 (function () {
   'use strict';
 
-  const SCREENS = ['loading', 'fatal', 'setup', 'login', 'home'];
+  const $ = UI.$;
+  const el = UI.el;
   let busy = false;
 
-  function $(id) { return document.getElementById(id); }
-
-  function el(tag, props, children) {
-    const node = document.createElement(tag);
-    if (props) {
-      if (props.text !== undefined) node.textContent = props.text;
-      if (props.className) node.className = props.className;
-    }
-    (children || []).forEach(function (c) { node.appendChild(c); });
-    return node;
-  }
-
-  function showScreen(name) {
-    SCREENS.forEach(function (n) { $('screen-' + n).hidden = (n !== name); });
-  }
-
-  function fatal(message) {
-    $('fatal-message').textContent = message;
-    showScreen('fatal');
-  }
-
-  function showMsg(boxId, type, text) {
-    const box = $(boxId);
-    box.hidden = false;
-    box.className = 'msg msg-' + type;
-    box.textContent = text;
-  }
-
-  function hideMsg(boxId) { $(boxId).hidden = true; }
-
-  function errorText(res) {
-    const e = res && res.error ? res.error : {};
-    return (e.message || 'Terjadi kesalahan.') + ' [' + (e.code || '?') + ']';
-  }
-
-  function setBusy(btn, on, busyText) {
-    if (on) {
-      btn.dataset.label = btn.textContent;
-      btn.textContent = busyText || 'Memproses...';
-      btn.disabled = true;
-    } else {
-      btn.textContent = btn.dataset.label || btn.textContent;
-      btn.disabled = false;
-    }
-  }
-
-  /** Mengunci tombol-tombol penting selama proses unduh berjalan. */
   function setBusyAll(on) {
     busy = on;
     ['btn-load-exams', 'btn-download-all', 'btn-logout'].forEach(function (id) { $(id).disabled = on; });
     document.querySelectorAll('#exam-list button').forEach(function (b) { b.disabled = on; });
-  }
-
-  function setRows(tbodyId, rows) {
-    const tb = $(tbodyId);
-    tb.replaceChildren();
-    rows.forEach(function (r) {
-      const v = (r[1] === null || r[1] === undefined || r[1] === '') ? '-' : String(r[1]);
-      tb.appendChild(el('tr', null, [el('th', { text: r[0] }), el('td', { text: v })]));
-    });
   }
 
   function updateNetStatus() {
@@ -79,7 +23,6 @@
     s.className = 'net-status ' + (online ? 'is-online' : 'is-offline');
   }
 
-  /** Panel debug. Teks yang sangat panjang (misalnya data gambar) dipotong. */
   function refreshDebug() {
     const x = Api.getLastExchange();
     $('debug-output').textContent = x
@@ -87,21 +30,6 @@
           return (typeof v === 'string' && v.length > 300) ? v.substring(0, 60) + '... (' + v.length + ' karakter)' : v;
         }, 2)
       : 'Belum ada request ke server.';
-  }
-
-  function formatDateTime(iso) {
-    if (!iso) return '-';
-    const d = new Date(iso);
-    if (isNaN(d.getTime())) return '-';
-    return d.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' });
-  }
-
-  function formatBytes(n) {
-    if (n === null || n === undefined) return '-';
-    if (n < 1024) return n + ' B';
-    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
-    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
-    return (n / 1073741824).toFixed(2) + ' GB';
   }
 
   function describeClockOffset(ms) {
@@ -130,34 +58,51 @@
     }
   }
 
+  /* ---------- Melanjutkan ujian yang sedang berjalan ---------- */
+
+  async function tryResume() {
+    const s = Auth.getState();
+    if (!s) return false;
+    try {
+      return await Exam.resumeIfAny(s.user);
+    } catch (e) {
+      await renderHome();
+      UI.showScreen('home');
+      UI.showMsg('home-message', 'error', 'Gagal melanjutkan ujian: ' + e.message);
+      return true;
+    }
+  }
+
   /* ---------- Login ---------- */
 
   async function onLogin(event) {
     event.preventDefault();
-    hideMsg('login-message');
+    UI.hideMsg('login-message');
     const btn = $('btn-login');
     const pw = $('login-password');
 
-    setBusy(btn, true, 'Memeriksa...');
+    UI.setBusy(btn, true, 'Memeriksa...');
     let res;
     try {
       res = await Auth.login($('login-username').value, pw.value);
     } catch (e) {
       res = { success: false, error: { code: 'CLIENT_ERROR', message: e.message } };
     }
-    setBusy(btn, false);
+    UI.setBusy(btn, false);
     pw.value = '';
     refreshDebug();
 
     if (!res.success) {
-      showMsg('login-message', 'error', errorText(res));
+      UI.showMsg('login-message', 'error', UI.errorText(res));
       pw.focus();
       return;
     }
+    if (await tryResume()) return;
+
     await renderHome();
-    showScreen('home');
-    if (res.data.warning) showMsg('session-message', 'warn', res.data.warning);
-    else if (res.data.note) showMsg('session-message', 'info', res.data.note);
+    UI.showScreen('home');
+    if (res.data.warning) UI.showMsg('session-message', 'warn', res.data.warning);
+    else if (res.data.note) UI.showMsg('session-message', 'info', res.data.note);
   }
 
   function onTogglePassword() {
@@ -170,14 +115,14 @@
 
   async function onPing() {
     const btn = $('btn-ping');
-    hideMsg('ping-message');
-    setBusy(btn, true, 'Menghubungi server...');
+    UI.hideMsg('ping-message');
+    UI.setBusy(btn, true, 'Menghubungi server...');
     const t0 = Date.now();
     const res = await Api.call('ping', {});
-    setBusy(btn, false);
+    UI.setBusy(btn, false);
     refreshDebug();
-    if (res.success) showMsg('ping-message', 'ok', 'Server aktif. Waktu respons ' + (Date.now() - t0) + ' ms.');
-    else showMsg('ping-message', 'error', errorText(res));
+    if (res.success) UI.showMsg('ping-message', 'ok', 'Server aktif. Waktu respons ' + (Date.now() - t0) + ' ms.');
+    else UI.showMsg('ping-message', 'error', UI.errorText(res));
   }
 
   /* ---------- Beranda ---------- */
@@ -191,34 +136,34 @@
     badge.textContent = s.mode === 'ONLINE' ? 'Masuk ONLINE' : 'Masuk OFFLINE (data perangkat)';
     badge.className = 'mode-badge ' + (s.mode === 'ONLINE' ? 'mode-online' : 'mode-offline');
 
-    setRows('home-info', [
+    UI.setRows('home-info', [
       ['User ID', u.user_id],
       ['Username', u.username],
       ['Kelas', u.class],
       ['Role', u.role],
-      ['Masuk pada', formatDateTime(s.logged_in_at)],
+      ['Masuk pada', UI.formatDateTime(s.logged_in_at)],
       ['Sesi server', s.session_valid
-        ? 'Berlaku sampai ' + formatDateTime(s.session_expires_at)
+        ? 'Berlaku sampai ' + UI.formatDateTime(s.session_expires_at)
         : 'HABIS (perlu login online untuk mengunduh/mengirim)'],
-      ['Login online terakhir', formatDateTime(s.last_online_login_at)],
-      ['Login offline berlaku sampai', formatDateTime(s.offline_valid_until)],
+      ['Login online terakhir', UI.formatDateTime(s.last_online_login_at)],
+      ['Login offline berlaku sampai', UI.formatDateTime(s.offline_valid_until)],
       ['Jam perangkat', describeClockOffset(s.clock_offset_ms) + ' (diukur saat login online terakhir)']
     ]);
 
     if (!s.session_valid) {
-      showMsg('session-message', 'warn',
+      UI.showMsg('session-message', 'warn',
         'Sesi server sudah habis. Anda tetap bisa memakai data di perangkat. ' +
         'Untuk mengunduh soal, tekan Keluar lalu login lagi saat ada internet.');
     } else {
-      hideMsg('session-message');
+      UI.hideMsg('session-message');
     }
   }
 
   async function renderHome() {
     const s = Auth.getState();
-    if (!s) { showScreen('login'); return; }
+    if (!s) { UI.showScreen('login'); return; }
     renderAccount();
-    hideMsg('home-message');
+    UI.hideMsg('home-message');
     await showLocalExams();
     await renderStorage();
   }
@@ -234,8 +179,8 @@
       return {
         ready: true,
         text: 'Paket versi ' + e.package_version + ': ' + e.question_count_local + ' soal, ' +
-              e.image_count + ' gambar (' + formatBytes(e.image_bytes) + '). Diunduh ' +
-              formatDateTime(e.downloaded_at) + ', diverifikasi ' + formatDateTime(e.verified_at) + '.'
+              e.image_count + ' gambar (' + UI.formatBytes(e.image_bytes) + '). Diunduh ' +
+              UI.formatDateTime(e.downloaded_at) + '.'
       };
     }
     if (!e.package_version) return { ready: false, text: 'Soal belum diunduh ke perangkat ini.' };
@@ -248,71 +193,93 @@
     return { ready: false, text: e.last_error ? ('Belum siap: ' + e.last_error) : 'Belum siap. Perlu unduh ulang.' };
   }
 
+  function badge(text, cls) { return el('span', { className: 'badge ' + (cls || ''), text: text }); }
+
   function actionButton(action, label, cls, examId) {
-    const b = el('button', { text: label, className: 'btn ' + cls });
-    b.type = 'button';
-    b.dataset.action = action;
-    b.dataset.examId = examId;
-    b.disabled = busy;
-    return b;
+    return el('button', {
+      className: 'btn ' + cls,
+      type: 'button',
+      text: label,
+      data: { action: action, examId: examId },
+      disabled: busy
+    });
   }
 
-  function renderExamCard(e, submitted) {
+  function renderExamCard(e, submitted, attempt, isStudent) {
     const info = readinessInfo(e);
     const badges = [];
-    badges.push(info.ready
-      ? el('span', { className: 'badge badge-done', text: 'READY' })
-      : el('span', { className: 'badge badge-warn', text: 'BELUM SIAP' }));
-    if (submitted === true) badges.push(el('span', { className: 'badge badge-done', text: 'Sudah dikirim' }));
-    if (e.random_question) badges.push(el('span', { className: 'badge', text: 'Soal diacak' }));
-    if (e.random_option) badges.push(el('span', { className: 'badge', text: 'Pilihan diacak' }));
-    if (e.token_required) badges.push(el('span', { className: 'badge', text: 'Perlu token' }));
+    const actions = [];
+    let statusText = info.text;
 
-    const actions = info.ready
-      ? [actionButton('verify', 'Periksa data', 'btn-light', e.exam_id),
-         actionButton('download', 'Unduh ulang', 'btn-light', e.exam_id)]
-      : [actionButton('download', 'Unduh soal', 'btn-primary', e.exam_id)];
+    if (attempt && attempt.status === 'IN_PROGRESS') {
+      badges.push(badge('SEDANG DIKERJAKAN', 'badge-warn'));
+      statusText = 'Ujian sedang berjalan. Waktu terus berjalan.';
+      actions.push(actionButton('start', 'Lanjutkan ujian', 'btn-primary', e.exam_id));
+    } else if (attempt) {
+      const synced = attempt.sync_status === 'SYNCED';
+      badges.push(badge(synced ? 'TERKIRIM' : 'SELESAI - BELUM TERKIRIM', synced ? 'badge-done' : 'badge-warn'));
+      statusText = 'Selesai ' + UI.formatDateTime(attempt.completed_at) + '. Terjawab ' +
+        attempt.answered_count + ' dari ' + (attempt.question_order || []).length + '.' +
+        (synced ? '' : ' Hasil akan dikirim saat online (Phase 9).');
+    } else {
+      badges.push(info.ready ? badge('READY', 'badge-done') : badge('BELUM SIAP', 'badge-warn'));
+      if (info.ready) {
+        if (isStudent) actions.push(actionButton('start', 'Mulai ujian', 'btn-primary', e.exam_id));
+        actions.push(actionButton('verify', 'Periksa data', 'btn-light', e.exam_id));
+        actions.push(actionButton('download', 'Unduh ulang', 'btn-light', e.exam_id));
+      } else {
+        actions.push(actionButton('download', 'Unduh soal', 'btn-primary', e.exam_id));
+      }
+    }
+
+    if (submitted === true) badges.push(badge('Sudah ada hasil di server', 'badge-done'));
+    if (e.random_question) badges.push(badge('Soal diacak'));
+    if (e.random_option) badges.push(badge('Pilihan diacak'));
+    if (e.token_required) badges.push(badge('Perlu token'));
 
     return el('div', { className: 'exam-card' }, [
       el('h4', { text: e.exam_name }),
       el('div', { className: 'exam-meta', text: 'ID: ' + e.exam_id + ' | ' + e.subject + ' kelas ' + e.grade }),
       el('div', { className: 'exam-meta', text: modeText(e) }),
       el('div', { className: 'exam-meta', text: e.question_count + ' soal | Periode ' + e.start_date + ' s/d ' + e.end_date }),
-      el('div', { className: 'exam-meta', text: info.text }),
+      el('div', { className: 'exam-meta', text: statusText }),
       el('div', null, badges),
-      el('div', { className: 'btn-row' }, actions)
+      actions.length ? el('div', { className: 'btn-row' }, actions) : null
     ]);
   }
 
   async function showLocalExams(message, type, submittedMap) {
     const s = Auth.getState();
     if (!s) return;
+    const isStudent = s.user.role === 'STUDENT';
     let exams;
+    let attempts = {};
     try {
       exams = await Sync.getLocalExams(s.user);
+      if (isStudent) attempts = await Exam.getUserAttempts(s.user.user_id);
     } catch (e) {
-      showMsg('home-message', 'error', 'Gagal membaca daftar ujian di perangkat: ' + e.message);
+      UI.showMsg('home-message', 'error', 'Gagal membaca daftar ujian di perangkat: ' + e.message);
       return;
     }
     const list = $('exam-list');
     list.replaceChildren();
     exams.forEach(function (e) {
-      list.appendChild(renderExamCard(e, submittedMap ? submittedMap[e.exam_id] : undefined));
+      list.appendChild(renderExamCard(e, submittedMap ? submittedMap[e.exam_id] : undefined,
+                                      attempts[e.exam_id], isStudent));
     });
     if (message) {
-      showMsg('home-message', type || 'info', message);
+      UI.showMsg('home-message', type || 'info', message);
     } else if (!exams.length) {
-      showMsg('home-message', 'info', 'Belum ada daftar ujian di perangkat ini. Tekan "Perbarui daftar ujian" saat ada internet.');
+      UI.showMsg('home-message', 'info', 'Belum ada daftar ujian di perangkat ini. Tekan "Perbarui daftar ujian" saat ada internet.');
     }
   }
 
-  /** Mengambil daftar ujian dari server dan menyimpannya. Mengembalikan true jika berhasil. */
   async function refreshExamList(showResult) {
     const res = await Auth.authedCall('getExamList', {});
     refreshDebug();
     if (!res.success) {
       renderAccount();
-      await showLocalExams('Gagal memperbarui dari server: ' + errorText(res) +
+      await showLocalExams('Gagal memperbarui dari server: ' + UI.errorText(res) +
         ' Menampilkan data yang tersimpan di perangkat.', 'error');
       return false;
     }
@@ -322,20 +289,17 @@
     try {
       await Sync.saveExamList(exams);
     } catch (e) {
-      showMsg('home-message', 'error', 'Daftar diterima dari server tetapi GAGAL disimpan ke perangkat: ' + e.message);
+      UI.showMsg('home-message', 'error', 'Daftar diterima dari server tetapi GAGAL disimpan ke perangkat: ' + e.message);
       return false;
     }
-    if (showResult) {
-      await showLocalExams(exams.length + ' ujian diperbarui dari server dan disimpan di perangkat.', 'ok', submitted);
-    } else {
-      await showLocalExams(null, null, submitted);
-    }
+    await showLocalExams(showResult ? exams.length + ' ujian diperbarui dari server dan disimpan di perangkat.' : null,
+                         'ok', submitted);
     return true;
   }
 
   async function onLoadExams() {
     if (busy) return;
-    hideMsg('home-message');
+    UI.hideMsg('home-message');
     if (!navigator.onLine) {
       await showLocalExams('Perangkat offline. Menampilkan daftar ujian yang tersimpan di perangkat.', 'warn');
       return;
@@ -344,7 +308,7 @@
     try {
       await refreshExamList(true);
     } catch (e) {
-      showMsg('home-message', 'error', 'Terjadi kesalahan: ' + e.message);
+      UI.showMsg('home-message', 'error', 'Terjadi kesalahan: ' + e.message);
     }
     setBusyAll(false);
     await renderStorage();
@@ -354,14 +318,14 @@
 
   async function runPreSync(examId) {
     if (!navigator.onLine) {
-      showMsg('home-message', 'warn', 'Perlu internet untuk mengunduh soal.');
+      UI.showMsg('home-message', 'warn', 'Perlu internet untuk mengunduh soal.');
       return { success: false, error: { code: 'OFFLINE', message: 'Offline' } };
     }
     DB.requestPersistence();
     setBusyAll(true);
     let res;
     try {
-      res = await Sync.preSync(examId, function (text) { showMsg('home-message', 'info', examId + ': ' + text); });
+      res = await Sync.preSync(examId, function (text) { UI.showMsg('home-message', 'info', examId + ': ' + text); });
     } catch (e) {
       res = { success: false, error: { code: 'CLIENT_ERROR', message: e.message } };
     }
@@ -375,10 +339,10 @@
       const text = d.status === 'ALREADY_READY'
         ? d.message
         : 'READY. ' + d.question_count + ' soal dan ' + d.image_count + ' gambar (' +
-          formatBytes(d.image_bytes) + ') tersimpan dan terverifikasi.';
-      showMsg('home-message', 'ok', examId + ': ' + text);
+          UI.formatBytes(d.image_bytes) + ') tersimpan dan terverifikasi.';
+      UI.showMsg('home-message', 'ok', examId + ': ' + text);
     } else {
-      showMsg('home-message', 'error', examId + ': ' + errorText(res));
+      UI.showMsg('home-message', 'error', examId + ': ' + UI.errorText(res));
     }
     await renderStorage();
     return res;
@@ -386,7 +350,7 @@
 
   async function runVerify(examId) {
     setBusyAll(true);
-    showMsg('home-message', 'info', examId + ': memeriksa data yang tersimpan...');
+    UI.showMsg('home-message', 'info', examId + ': memeriksa data yang tersimpan...');
     let r;
     try {
       r = await Sync.checkStored(examId);
@@ -395,8 +359,23 @@
     }
     setBusyAll(false);
     await showLocalExams();
-    if (r.ok) showMsg('home-message', 'ok', examId + ': data di perangkat lengkap dan utuh.');
-    else showMsg('home-message', 'error', examId + ': data bermasalah, perlu unduh ulang. ' + r.errors.join('; '));
+    if (r.ok) UI.showMsg('home-message', 'ok', examId + ': data di perangkat lengkap dan utuh.');
+    else UI.showMsg('home-message', 'error', examId + ': data bermasalah, perlu unduh ulang. ' + r.errors.join('; '));
+  }
+
+  async function onStartExam(examId) {
+    const s = Auth.getState();
+    if (!s) return;
+    UI.hideMsg('home-message');
+    setBusyAll(true);
+    let r;
+    try {
+      r = await Exam.openIntro(s.user, examId);
+    } catch (e) {
+      r = { ok: false, code: 'CLIENT_ERROR', message: e.message };
+    }
+    setBusyAll(false);
+    if (!r.ok) UI.showMsg('home-message', 'error', r.message + ' [' + r.code + ']');
   }
 
   async function onExamListClick(event) {
@@ -405,31 +384,35 @@
     const examId = btn.dataset.examId;
     if (btn.dataset.action === 'download') await runPreSync(examId);
     else if (btn.dataset.action === 'verify') await runVerify(examId);
+    else if (btn.dataset.action === 'start') await onStartExam(examId);
   }
 
   async function onDownloadAll() {
     if (busy) return;
-    hideMsg('home-message');
+    UI.hideMsg('home-message');
     if (!navigator.onLine) {
-      showMsg('home-message', 'warn', 'Perlu internet untuk mengunduh soal.');
+      UI.showMsg('home-message', 'warn', 'Perlu internet untuk mengunduh soal.');
       return;
     }
     setBusyAll(true);
-    showMsg('home-message', 'info', 'Memperbarui daftar ujian...');
+    UI.showMsg('home-message', 'info', 'Memperbarui daftar ujian...');
     let listOk = false;
     try {
       listOk = await refreshExamList(false);
     } catch (e) {
-      showMsg('home-message', 'error', 'Terjadi kesalahan: ' + e.message);
+      UI.showMsg('home-message', 'error', 'Terjadi kesalahan: ' + e.message);
     }
     setBusyAll(false);
     if (!listOk) return;
 
     const s = Auth.getState();
     const exams = await Sync.getLocalExams(s.user);
-    const targets = exams.filter(function (e) { return e.status === 'ACTIVE' && !Sync.isReady(e); });
+    const attempts = s.user.role === 'STUDENT' ? await Exam.getUserAttempts(s.user.user_id) : {};
+    const targets = exams.filter(function (e) {
+      return e.status === 'ACTIVE' && !Sync.isReady(e) && !attempts[e.exam_id];
+    });
     if (!targets.length) {
-      showMsg('home-message', 'ok', 'Semua ujian aktif sudah READY di perangkat ini.');
+      UI.showMsg('home-message', 'ok', 'Semua ujian aktif sudah READY di perangkat ini.');
       return;
     }
 
@@ -444,7 +427,7 @@
         summary.push(targets[i].exam_id + ': GAGAL (' + (r && r.error ? r.error.message : '?') + ')');
       }
     }
-    showMsg('home-message', allOk ? 'ok' : 'warn', summary.join(' | '));
+    UI.showMsg('home-message', allOk ? 'ok' : 'warn', summary.join(' | '));
   }
 
   /* ---------- Penyimpanan perangkat ---------- */
@@ -462,18 +445,18 @@
       const rows = [
         ['Database', DB.NAME + ' versi ' + DB.VERSION],
         ['Penyimpanan permanen', persistText],
-        ['Terpakai', formatBytes(info.usage) + ' dari kuota ' + formatBytes(info.quota)],
-        ['Tes simpan terakhir', test ? ('Kode ' + test.code + ' pada ' + formatDateTime(test.written_at)) : 'Belum pernah']
+        ['Terpakai', UI.formatBytes(info.usage) + ' dari kuota ' + UI.formatBytes(info.quota)],
+        ['Tes simpan terakhir', test ? ('Kode ' + test.code + ' pada ' + UI.formatDateTime(test.written_at)) : 'Belum pernah']
       ];
       DB.STORES.forEach(function (name) { rows.push(['Jumlah data: ' + name, counts[name]]); });
-      setRows('storage-info', rows);
+      UI.setRows('storage-info', rows);
     } catch (e) {
-      showMsg('storage-message', 'error', 'Gagal membaca info penyimpanan: ' + e.message);
+      UI.showMsg('storage-message', 'error', 'Gagal membaca info penyimpanan: ' + e.message);
     }
   }
 
   async function onStorageTest() {
-    hideMsg('storage-message');
+    UI.hideMsg('storage-message');
     try {
       const value = {
         written_at: new Date().toISOString(),
@@ -482,23 +465,32 @@
       await DB.setSetting('storage_test', value);
       const back = await DB.getSetting('storage_test');
       if (back && back.code === value.code) {
-        showMsg('storage-message', 'ok',
+        UI.showMsg('storage-message', 'ok',
           'Data tersimpan dan terbaca kembali. Kode: ' + value.code +
           '. Tutup browser (atau matikan-nyalakan HP), buka lagi, dan pastikan kode ini masih ada.');
       } else {
-        showMsg('storage-message', 'error', 'Data tertulis tetapi tidak terbaca kembali dengan benar.');
+        UI.showMsg('storage-message', 'error', 'Data tertulis tetapi tidak terbaca kembali dengan benar.');
       }
     } catch (e) {
-      showMsg('storage-message', 'error', 'Gagal menyimpan: ' + e.message);
+      UI.showMsg('storage-message', 'error', 'Gagal menyimpan: ' + e.message);
     }
     await renderStorage();
   }
 
   async function onWipe() {
     if (busy) return;
-    const answer = prompt('PERINGATAN: semua data aplikasi di perangkat ini akan dihapus.\n' +
-                          'Ketik HAPUS (huruf besar) untuk melanjutkan.');
-    if (answer !== 'HAPUS') { alert('Dibatalkan. Tidak ada data yang dihapus.'); return; }
+    let unsynced = 0;
+    try { unsynced = await Exam.countUnsyncedAttempts(); } catch (e) { unsynced = 0; }
+
+    let phrase = 'HAPUS';
+    let warning = 'PERINGATAN: semua data aplikasi di perangkat ini akan dihapus.\n';
+    if (unsynced > 0) {
+      phrase = 'HAPUS DATA UJIAN';
+      warning += 'BAHAYA: ada ' + unsynced + ' hasil ujian yang BELUM TERKIRIM ke server. ' +
+                 'Jika dihapus, hasil tersebut HILANG PERMANEN.\n';
+    }
+    const answer = prompt(warning + 'Ketik ' + phrase + ' (huruf besar) untuk melanjutkan.');
+    if (answer !== phrase) { alert('Dibatalkan. Tidak ada data yang dihapus.'); return; }
     try {
       await DB.deleteDatabase();
       alert('Semua data lokal sudah dihapus. Halaman akan dimuat ulang.');
@@ -516,8 +508,16 @@
       console.error(e);
     }
     $('login-username').value = '';
-    hideMsg('login-message');
-    showScreen('login');
+    UI.hideMsg('login-message');
+    UI.showScreen('login');
+  }
+
+  /* ---------- Kembali dari layar ujian ---------- */
+
+  async function backToHome(message) {
+    await renderHome();
+    UI.showScreen('home');
+    if (message) UI.showMsg('home-message', 'warn', message);
   }
 
   /* ---------- Mulai ---------- */
@@ -539,18 +539,22 @@
     $('btn-storage-refresh').addEventListener('click', renderStorage);
     $('btn-wipe').addEventListener('click', onWipe);
 
+    Exam.init({ onExit: backToHome });
+
     if (!Api.isConfigured()) {
-      showScreen('setup');
+      UI.showScreen('setup');
       return;
     }
     if (!window.isSecureContext || !window.crypto || !crypto.subtle) {
-      fatal('Halaman harus dibuka lewat alamat https (GitHub Pages). Fitur keamanan browser tidak tersedia.');
+      $('fatal-message').textContent = 'Halaman harus dibuka lewat alamat https (GitHub Pages). Fitur keamanan browser tidak tersedia.';
+      UI.showScreen('fatal');
       return;
     }
     try {
       await DB.open();
     } catch (e) {
-      fatal('Penyimpanan lokal (IndexedDB) tidak bisa dibuka: ' + e.message);
+      $('fatal-message').textContent = 'Penyimpanan lokal (IndexedDB) tidak bisa dibuka: ' + e.message;
+      UI.showScreen('fatal');
       return;
     }
 
@@ -565,10 +569,11 @@
     }
 
     if (restored) {
+      if (await tryResume()) return;
       await renderHome();
-      showScreen('home');
+      UI.showScreen('home');
     } else {
-      showScreen('login');
+      UI.showScreen('login');
     }
   }
 
