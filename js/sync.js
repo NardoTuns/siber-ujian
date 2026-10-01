@@ -6,6 +6,7 @@
  *  - Soal + data ujian disimpan dalam SATU transaksi (semua atau tidak sama sekali).
  *  - Paket tidak boleh diganti jika ada ujian yang belum terkirim untuk exam tersebut.
  *  - Jika server mengirim kunci jawaban (seharusnya tidak pernah), paket DITOLAK.
+ *  - Ujian bertoken: teks soal disimpan dalam keadaan TERKUNCI.
  */
 const Sync = (function () {
   'use strict';
@@ -36,7 +37,11 @@ const Sync = (function () {
     return out;
   }
 
-  /** READY berarti: status READY DAN versi paket di perangkat = versi terbaru yang diketahui. */
+  /** Checksum paket. Urutan field HARUS sama dengan server. */
+  function packageJson(exam, questions, secure, keySlots) {
+    return JSON.stringify({ exam: exam, questions: questions, secure: secure, key_slots: keySlots });
+  }
+
   function isReady(rec) {
     return !!rec && rec.local_status === 'READY' && rec.package_version !== null &&
       rec.package_version !== undefined && String(rec.package_version) === String(rec.version);
@@ -53,14 +58,14 @@ const Sync = (function () {
       const e = serverExams[i];
       if (!e || !e.exam_id) continue;
       const old = await DB.get('exams', e.exam_id);
-      const rec = Object.assign({}, old || {}); // pertahankan data paket yang sudah diunduh
+      const rec = Object.assign({}, old || {});
       SERVER_FIELDS.forEach(function (f) { rec[f] = e[f]; });
 
       if (!old) {
         rec.local_status = 'NOT_READY';
         rec.package_version = null;
       } else if (old.local_status === 'READY' && String(old.package_version) !== String(e.version)) {
-        rec.local_status = 'NOT_READY'; // ada versi baru di server -> wajib unduh ulang
+        rec.local_status = 'NOT_READY';
       }
       rec.list_updated_at = now;
       records.push(rec);
@@ -100,6 +105,25 @@ const Sync = (function () {
     if (!(e.question_count > 0)) errs.push('QUESTION_COUNT tidak valid');
     if (e.version === undefined || e.version === null || e.version === '') errs.push('VERSION kosong');
 
+    const encrypted = !!data.secure;
+    if (e.token_required && !encrypted) errs.push('Ujian memerlukan token tetapi paket tidak terkunci');
+    if (encrypted) {
+      const s = data.secure;
+      if (typeof s.nonce !== 'string' || typeof s.ct !== 'string' || typeof s.mac !== 'string') {
+        errs.push('Paket terkunci tidak lengkap');
+      }
+      if (!Array.isArray(data.key_slots) || !data.key_slots.length) {
+        errs.push('Data token tidak ada');
+      } else {
+        data.key_slots.forEach(function (k, i) {
+          if (!k || !k.token_id || typeof k.meta_json !== 'string' || !k.salt || !(k.iterations > 0) ||
+              !k.nonce || !k.ct || !k.mac) {
+            errs.push('Data token ke-' + (i + 1) + ' rusak');
+          }
+        });
+      }
+    }
+
     if (!Array.isArray(data.questions)) { errs.push('Daftar soal tidak ada'); return errs; }
     if (data.questions.length !== e.question_count) {
       errs.push('Jumlah soal ' + data.questions.length + ', seharusnya ' + e.question_count);
@@ -118,13 +142,18 @@ const Sync = (function () {
       ids[q.question_id] = true;
       if (!(q.number > 0) || nums[q.number]) errs.push(label + ': nomor kosong/ganda');
       nums[q.number] = true;
-      if (!q.question) errs.push(label + ': teks soal kosong');
-      if (!q.options || typeof q.options !== 'object') {
-        errs.push(label + ': pilihan jawaban tidak ada');
+
+      if (encrypted) {
+        if (q.question !== undefined || q.options !== undefined) errs.push(label + ': teks soal seharusnya terkunci');
       } else {
-        OPTION_LETTERS.forEach(function (L) {
-          if (typeof q.options[L] !== 'string' || !q.options[L]) errs.push(label + ': pilihan ' + L + ' kosong');
-        });
+        if (!q.question) errs.push(label + ': teks soal kosong');
+        if (!q.options || typeof q.options !== 'object') {
+          errs.push(label + ': pilihan jawaban tidak ada');
+        } else {
+          OPTION_LETTERS.forEach(function (L) {
+            if (typeof q.options[L] !== 'string' || !q.options[L]) errs.push(label + ': pilihan ' + L + ' kosong');
+          });
+        }
       }
     });
     return errs;
@@ -150,7 +179,7 @@ const Sync = (function () {
         return { mime_type: d.mime_type, size: d.size, sha256: d.sha256, blob: new Blob([bytes], { type: d.mime_type }) };
       }
       last = res;
-      if (RETRYABLE_CODES.indexOf(res.error.code) === -1) break; // error permanen, tidak perlu diulang
+      if (RETRYABLE_CODES.indexOf(res.error.code) === -1) break;
       await sleep(1500 * (attempt + 1));
     }
     throw new Error('Gambar soal nomor ' + q.number + ' gagal diunduh: ' +
@@ -159,7 +188,6 @@ const Sync = (function () {
 
   /* ---------- Penyimpanan atomik ---------- */
 
-  /** Menghapus soal lama + menyimpan soal baru + data ujian dalam SATU transaksi. */
   async function writePackage(examId, examRecord, questionRecords) {
     const db = await DB.open();
     return new Promise(function (resolve, reject) {
@@ -175,7 +203,7 @@ const Sync = (function () {
       t.onabort = function () { reject(t.error || new Error('Penyimpanan dibatalkan. Kemungkinan memori perangkat penuh.')); };
       try {
         const qs = t.objectStore('questions');
-        qs.delete(IDBKeyRange.bound([examId], [examId, []])); // semua soal lama ujian ini
+        qs.delete(IDBKeyRange.bound([examId], [examId, []]));
         questionRecords.forEach(function (r) { qs.put(r); });
         t.objectStore('exams').put(examRecord);
       } catch (e) {
@@ -207,7 +235,8 @@ const Sync = (function () {
       errs.push('Jumlah soal tersimpan ' + qs.length + ', seharusnya ' + rec.question_count_local);
     }
 
-    const cs = await sha256Hex(JSON.stringify({ exam: rec.exam_raw, questions: qs.map(function (q) { return q.raw; }) }));
+    const cs = await sha256Hex(packageJson(rec.exam_raw, qs.map(function (q) { return q.raw; }),
+                                           rec.secure_raw, rec.key_slots));
     if (cs !== rec.checksum) errs.push('Checksum soal tersimpan tidak cocok');
 
     for (let i = 0; i < qs.length; i++) {
@@ -221,7 +250,6 @@ const Sync = (function () {
     return errs;
   }
 
-  /** Tombol "Periksa data". Jika rusak, status diturunkan menjadi NOT_READY. */
   async function checkStored(examId) {
     const errs = await verifyStoredPackage(examId);
     const rec = await DB.get('exams', examId);
@@ -252,12 +280,14 @@ const Sync = (function () {
       const res = await Auth.authedCall('syncExam', { exam_id: examId });
       if (!res.success) return res;
       const data = res.data;
+      if (data.secure === undefined) data.secure = null;
+      if (data.key_slots === undefined) data.key_slots = [];
 
       progress('Memeriksa kelengkapan paket...');
       const errs = verifyPackage(data, examId);
       if (errs.length) return fail('PACKAGE_INVALID', 'Paket soal tidak valid: ' + errs.join('; '));
 
-      const checksum = await sha256Hex(JSON.stringify({ exam: data.exam, questions: data.questions }));
+      const checksum = await sha256Hex(packageJson(data.exam, data.questions, data.secure, data.key_slots));
       if (checksum !== data.checksum) {
         return fail('CHECKSUM_MISMATCH', 'Paket soal rusak saat diunduh (checksum berbeda). Coba lagi.');
       }
@@ -282,6 +312,7 @@ const Sync = (function () {
       }
 
       progress('Menyimpan ke perangkat...');
+      const encrypted = !!data.secure;
       const now = new Date().toISOString();
       const examRecord = {};
       SERVER_FIELDS.forEach(function (f) { examRecord[f] = data.exam[f]; });
@@ -290,6 +321,10 @@ const Sync = (function () {
         package_version: String(data.exam.version),
         checksum: checksum,
         exam_raw: data.exam,
+        secure_raw: data.secure,
+        key_slots: data.key_slots,
+        encrypted: encrypted,
+        token_count: data.key_slots.length,
         question_count_local: data.questions.length,
         image_count: withImage.length,
         image_bytes: imageBytes,
@@ -304,8 +339,9 @@ const Sync = (function () {
           exam_id: examId,
           question_id: q.question_id,
           number: q.number,
-          question: q.question,
-          options: q.options,
+          question: encrypted ? null : q.question,
+          options: encrypted ? null : q.options,
+          encrypted: encrypted,
           has_image: !!q.has_image,
           image: images[q.question_id] || null,
           version: q.version,
@@ -331,11 +367,11 @@ const Sync = (function () {
           exam_id: examId,
           question_count: data.questions.length,
           image_count: withImage.length,
-          image_bytes: imageBytes
+          image_bytes: imageBytes,
+          encrypted: encrypted
         }
       };
     } catch (e) {
-      // Paket lama TIDAK diganggu jika kegagalan terjadi sebelum penyimpanan dimulai
       if (written) {
         try { await setStatus(examId, 'NOT_READY', e.message); } catch (ignore) { /* abaikan */ }
       }
