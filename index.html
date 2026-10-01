@@ -131,7 +131,7 @@
             <div id="exam-progress" class="small"></div>
           </div>
           <div class="timer-box">
-            <div class="small">Sisa waktu</div>
+            <div id="exam-timer-label" class="small">Sisa waktu</div>
             <div id="exam-timer" class="timer">--:--</div>
           </div>
         </div>
@@ -139,6 +139,7 @@
       </div>
 
       <div class="card">
+        <div id="exam-mode-info" class="msg msg-info mode-info" hidden></div>
         <div id="exam-question-text" class="question-text"></div>
         <img id="exam-question-image" class="question-image" alt="Gambar soal" hidden>
         <div id="exam-options" class="options"></div>
@@ -147,18 +148,18 @@
       </div>
 
       <div class="card">
-        <div class="btn-row">
+        <div id="nav-row" class="btn-row">
           <button type="button" id="btn-prev" class="btn btn-light">&larr; Sebelumnya</button>
           <button type="button" id="btn-next" class="btn btn-primary">Berikutnya &rarr;</button>
         </div>
         <h4 class="grid-title">Nomor soal</h4>
         <div id="exam-grid" class="grid"></div>
-        <p class="small">Kotak biru = sudah dijawab. Bingkai oranye = soal yang sedang dibuka.</p>
+        <p id="grid-legend" class="small"></p>
         <button type="button" id="btn-finish" class="btn btn-danger btn-block">Selesai ujian</button>
       </div>
     </section>
 
-    <!-- LAYAR: Konfirmasi selesai -->
+    <!-- LAYAR: Konfirmasi selesai (khusus mode TOTAL) -->
     <section id="screen-exam-confirm" class="screen" hidden>
       <div class="card">
         <h2>Selesaikan ujian?</h2>
