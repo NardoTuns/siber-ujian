@@ -38,6 +38,7 @@ const APP_SHELL = [
   'js/app.js',
   'js/dashboard.js',
   'js/pwa.js',
+  'js/reports.js',
   'assets/icons/icon-192.png',
   'assets/icons/icon-512.png',
   'assets/icons/icon-maskable-512.png',
