@@ -18,7 +18,22 @@
 
   <main class="container">
 
-    <!-- LAYAR 1: URL API belum diisi -->
+    <!-- LAYAR: Memuat -->
+    <section id="screen-loading" class="screen">
+      <div class="card"><p>Memuat aplikasi...</p></div>
+    </section>
+
+    <!-- LAYAR: Error fatal -->
+    <section id="screen-fatal" class="screen" hidden>
+      <div class="card">
+        <h2>Aplikasi tidak dapat berjalan</h2>
+        <div id="fatal-message" class="msg msg-error"></div>
+        <p class="small">Coba: gunakan Google Chrome versi terbaru, jangan gunakan mode Penyamaran/Incognito,
+          dan buka lewat alamat <code>https://...github.io/siber-ujian/</code>.</p>
+      </div>
+    </section>
+
+    <!-- LAYAR: URL API belum diisi -->
     <section id="screen-setup" class="screen" hidden>
       <div class="card">
         <h2>URL API belum diatur</h2>
@@ -26,7 +41,7 @@
       </div>
     </section>
 
-    <!-- LAYAR 2: Login -->
+    <!-- LAYAR: Login -->
     <section id="screen-login" class="screen" hidden>
       <div class="card">
         <h2>Masuk</h2>
@@ -44,6 +59,7 @@
           <button type="submit" id="btn-login" class="btn btn-primary btn-block">Masuk</button>
         </form>
         <div id="login-message" class="msg" hidden></div>
+        <p class="small">Tanpa internet? Anda tetap bisa masuk jika akun ini pernah login online di perangkat ini.</p>
       </div>
 
       <div class="card">
@@ -52,22 +68,38 @@
       </div>
     </section>
 
-    <!-- LAYAR 3: Beranda setelah login -->
+    <!-- LAYAR: Beranda -->
     <section id="screen-home" class="screen" hidden>
       <div class="card">
         <h2 id="home-name"></h2>
+        <div id="home-mode" class="mode-badge"></div>
         <table class="info-table"><tbody id="home-info"></tbody></table>
-        <button type="button" id="btn-logout" class="btn btn-danger btn-block">Keluar</button>
+        <div id="session-message" class="msg" hidden></div>
+        <button type="button" id="btn-logout" class="btn btn-light btn-block">Keluar</button>
       </div>
 
       <div class="card">
-        <h3>Uji koneksi API</h3>
-        <div class="btn-row">
-          <button type="button" id="btn-load-config" class="btn btn-light">Muat konfigurasi</button>
-          <button type="button" id="btn-load-exams" class="btn btn-primary">Muat daftar ujian</button>
-        </div>
+        <h3>Daftar ujian</h3>
+        <button type="button" id="btn-load-exams" class="btn btn-primary btn-block">Perbarui daftar ujian</button>
         <div id="home-message" class="msg" hidden></div>
         <div id="exam-list"></div>
+      </div>
+
+      <div class="card">
+        <h3>Penyimpanan perangkat</h3>
+        <table class="info-table"><tbody id="storage-info"></tbody></table>
+        <div class="btn-row">
+          <button type="button" id="btn-storage-test" class="btn btn-light">Uji simpan data</button>
+          <button type="button" id="btn-storage-refresh" class="btn btn-light">Segarkan info</button>
+        </div>
+        <div id="storage-message" class="msg" hidden></div>
+      </div>
+
+      <div class="card danger-zone">
+        <h3>Khusus pengujian</h3>
+        <p class="small">Menghapus SEMUA data aplikasi di perangkat ini (akun tersimpan, daftar ujian, pengaturan).
+          Jangan dipakai setelah ujian sungguhan dimulai.</p>
+        <button type="button" id="btn-wipe" class="btn btn-danger btn-block">Hapus semua data lokal</button>
       </div>
     </section>
 
@@ -81,8 +113,10 @@
   <footer class="footer" id="footer-version"></footer>
 
   <script src="js/config.js" defer></script>
+  <script src="js/db.js" defer></script>
   <script src="js/api.js" defer></script>
   <script src="js/auth.js" defer></script>
+  <script src="js/sync.js" defer></script>
   <script src="js/app.js" defer></script>
 </body>
 </html>
