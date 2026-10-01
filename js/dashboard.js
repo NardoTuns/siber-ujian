@@ -203,6 +203,7 @@
 
   function render(data, fetchedAt, fromCache) {
     lastData = data;
+    window.SIBER_DASH = { data: data, fetched_at: fetchedAt, from_cache: fromCache, teacher: Auth.getState() ? Auth.getState().user.name : '' };
     const e = data.exam;
     $('dash-exam-info').textContent =
       e.exam_name + ' | ' + e.subject + ' kelas ' + e.grade + ' | Mode ' + e.mode +
