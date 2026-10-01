@@ -1,6 +1,6 @@
 /**
  * SIBER-UJIAN — config.js
- * Satu-satunya file yang perlu diubah saat URL API berganti.
+ * Pengaturan aplikasi di sisi siswa.
  * JANGAN menaruh password, kunci jawaban, atau data rahasia di sini.
  */
 const SIBER_CONFIG = {
@@ -10,6 +10,12 @@ const SIBER_CONFIG = {
   // Batas waktu tunggu respons server (milidetik). 30000 = 30 detik.
   REQUEST_TIMEOUT_MS: 30000,
 
+  // Login offline hanya diizinkan maksimal sekian hari sejak login online terakhir.
+  OFFLINE_LOGIN_MAX_DAYS: 30,
+
+  // Kekuatan "sidik jari" password di perangkat. Jangan diturunkan.
+  LOCAL_PBKDF2_ITERATIONS: 100000,
+
   // Versi aplikasi di sisi siswa (naikkan setiap ada perubahan)
-  CLIENT_VERSION: '0.2.0'
+  CLIENT_VERSION: '0.3.0'
 };
