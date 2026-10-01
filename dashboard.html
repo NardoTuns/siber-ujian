@@ -109,6 +109,19 @@
       </div>
 
       <div class="card">
+        <h3>Export</h3>
+        <p class="small">Mengekspor data yang sedang tampil (ujian dan filter kelas yang dipilih).
+          Untuk Microsoft Excel gunakan tombol Excel (.xlsx). CSV cocok untuk Google Sheets.</p>
+        <div class="export-grid">
+          <button type="button" id="btn-export-xlsx" class="btn btn-primary">Excel (.xlsx) lengkap</button>
+          <button type="button" id="btn-export-print" class="btn btn-primary">Cetak / PDF</button>
+          <button type="button" id="btn-export-csv-participants" class="btn btn-light">CSV Peserta</button>
+          <button type="button" id="btn-export-csv-items" class="btn btn-light">CSV Analisis Soal</button>
+        </div>
+        <div id="export-message" class="msg" hidden></div>
+      </div>
+
+      <div class="card">
         <h3>Ringkasan</h3>
         <div id="summary-grid" class="summary-grid"></div>
       </div>
@@ -151,12 +164,16 @@
 
   <footer class="footer" id="footer-version"></footer>
 
+  <!-- Isi laporan cetak/PDF (hanya tampil saat mencetak) -->
+  <div id="print-area" class="print-area"></div>
+
   <script src="js/config.js" defer></script>
   <script src="js/ui.js" defer></script>
   <script src="js/db.js" defer></script>
   <script src="js/api.js" defer></script>
   <script src="js/auth.js" defer></script>
   <script src="js/dashboard.js" defer></script>
+  <script src="js/reports.js" defer></script>
   <script src="js/pwa.js" defer></script>
 </body>
 </html>
