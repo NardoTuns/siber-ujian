@@ -16,6 +16,10 @@ const SIBER_CONFIG = {
   // Kekuatan "sidik jari" password di perangkat. Jangan diturunkan.
   LOCAL_PBKDF2_ITERATIONS: 100000,
 
+  // SEMENTARA (Phase 5-7): langkah token dilewati karena verifikasi token dibuat di Phase 8.
+  // WAJIB diubah menjadi false di Phase 8 sebelum dipakai ujian sungguhan.
+  DEV_SKIP_TOKEN: true,
+
   // Versi aplikasi di sisi siswa (naikkan setiap ada perubahan)
-  CLIENT_VERSION: '0.4.0'
+  CLIENT_VERSION: '0.5.0'
 };
