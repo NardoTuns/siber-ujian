@@ -17,5 +17,5 @@ const SIBER_CONFIG = {
   LOCAL_PBKDF2_ITERATIONS: 100000,
 
   // Versi aplikasi di sisi siswa (naikkan setiap ada perubahan)
-  CLIENT_VERSION: '0.9.0'
+  CLIENT_VERSION: '0.10.0'
 };
