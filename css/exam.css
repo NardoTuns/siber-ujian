@@ -1,0 +1,81 @@
+/* SIBER-UJIAN — exam.css (layar ujian) */
+
+.exam-header { position: sticky; top: 0; z-index: 10; }
+.exam-header-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.exam-title { font-weight: 700; }
+
+.timer-box { text-align: right; }
+.timer {
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: #1e3a8a;
+  white-space: nowrap;
+}
+.timer.timer-warn { color: #b91c1c; }
+
+.question-text { font-size: 18px; white-space: pre-wrap; margin-bottom: 12px; }
+.question-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px 0 12px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+}
+
+.options { display: flex; flex-direction: column; gap: 10px; }
+.option-btn {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  width: 100%;
+  text-align: left;
+  padding: 12px;
+  min-height: 52px;
+  border: 2px solid #d1d5db;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f2937;
+  font-size: 16px;
+  cursor: pointer;
+}
+.option-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.option-letter {
+  flex: 0 0 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+.option-text { padding-top: 4px; }
+.option-btn.selected { border-color: #1d4ed8; background: #eff6ff; }
+.option-btn.selected .option-letter { background: #1d4ed8; color: #ffffff; }
+.option-btn.pending { border-style: dashed; }
+
+.save-status { margin: 12px 0 8px; font-size: 14px; padding: 8px 10px; border-radius: 8px; }
+.save-ok { background: #dcfce7; color: #166534; }
+.save-pending { background: #fef3c7; color: #92400e; }
+.save-error { background: #fee2e2; color: #991b1b; font-weight: 600; }
+.save-none { background: #f3f4f6; color: #4b5563; }
+
+.grid-title { margin: 16px 0 8px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
+.grid-btn {
+  min-height: 44px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2937;
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+}
+.grid-btn.answered { background: #1d4ed8; color: #ffffff; border-color: #1d4ed8; }
+.grid-btn.current { outline: 3px solid #f59e0b; outline-offset: 1px; }
+
+.rules { padding-left: 20px; font-size: 14px; }
+.rules li { margin-bottom: 4px; }
