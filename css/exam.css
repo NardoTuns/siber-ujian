@@ -14,6 +14,8 @@
 }
 .timer.timer-warn { color: #b91c1c; }
 
+.mode-info { margin-top: 0; margin-bottom: 12px; }
+
 .question-text { font-size: 18px; white-space: pre-wrap; margin-bottom: 12px; }
 .question-image {
   display: block;
@@ -74,6 +76,8 @@
   font-size: 15px;
   cursor: pointer;
 }
+.grid-btn:disabled { cursor: default; opacity: 1; }
+.grid-btn.locked { background: #e5e7eb; color: #6b7280; border-color: #d1d5db; }
 .grid-btn.answered { background: #1d4ed8; color: #ffffff; border-color: #1d4ed8; }
 .grid-btn.current { outline: 3px solid #f59e0b; outline-offset: 1px; }
 
