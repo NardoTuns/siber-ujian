@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SIBER-UJIAN</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/login.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="app-title">SIBER-UJIAN</div>
+      <div class="school-name" id="school-name">&nbsp;</div>
+    </div>
+    <div class="net-status" id="net-status">...</div>
+  </header>
+
+  <main class="container">
+
+    <!-- LAYAR 1: URL API belum diisi -->
+    <section id="screen-setup" class="screen" hidden>
+      <div class="card">
+        <h2>URL API belum diatur</h2>
+        <p>Buka file <code>js/config.js</code>, lalu isi <code>API_URL</code> dengan URL Web App dari Phase 1 (berakhiran <code>/exec</code>).</p>
+      </div>
+    </section>
+
+    <!-- LAYAR 2: Login -->
+    <section id="screen-login" class="screen" hidden>
+      <div class="card">
+        <h2>Masuk</h2>
+        <form id="login-form" autocomplete="off" novalidate>
+          <label for="login-username">Username</label>
+          <input id="login-username" type="text" autocapitalize="none" autocorrect="off"
+                 spellcheck="false" maxlength="50">
+
+          <label for="login-password">Password</label>
+          <div class="password-row">
+            <input id="login-password" type="password" maxlength="100">
+            <button type="button" id="btn-toggle-password" class="btn btn-light btn-small">Lihat</button>
+          </div>
+
+          <button type="submit" id="btn-login" class="btn btn-primary btn-block">Masuk</button>
+        </form>
+        <div id="login-message" class="msg" hidden></div>
+      </div>
+
+      <div class="card">
+        <button type="button" id="btn-ping" class="btn btn-light btn-block">Tes koneksi ke server</button>
+        <div id="ping-message" class="msg" hidden></div>
+      </div>
+    </section>
+
+    <!-- LAYAR 3: Beranda setelah login -->
+    <section id="screen-home" class="screen" hidden>
+      <div class="card">
+        <h2 id="home-name"></h2>
+        <table class="info-table"><tbody id="home-info"></tbody></table>
+        <button type="button" id="btn-logout" class="btn btn-danger btn-block">Keluar</button>
+      </div>
+
+      <div class="card">
+        <h3>Uji koneksi API</h3>
+        <div class="btn-row">
+          <button type="button" id="btn-load-config" class="btn btn-light">Muat konfigurasi</button>
+          <button type="button" id="btn-load-exams" class="btn btn-primary">Muat daftar ujian</button>
+        </div>
+        <div id="home-message" class="msg" hidden></div>
+        <div id="exam-list"></div>
+      </div>
+    </section>
+
+    <!-- Panel debug -->
+    <details class="card debug">
+      <summary>Panel debug (untuk pengujian)</summary>
+      <pre id="debug-output">Belum ada request.</pre>
+    </details>
+  </main>
+
+  <footer class="footer" id="footer-version"></footer>
+
+  <script src="js/config.js" defer></script>
+  <script src="js/api.js" defer></script>
+  <script src="js/auth.js" defer></script>
+  <script src="js/app.js" defer></script>
+</body>
+</html>
