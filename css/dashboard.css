@@ -57,3 +57,27 @@
   overflow-y: auto;
 }
 .modal-card { background: #ffffff; border-radius: 12px; padding: 16px; max-width: 820px; width: 100%; }
+/* ---------- Export & Cetak / PDF (Phase 12) ---------- */
+.export-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.export-grid .btn { width: 100%; }
+
+.print-area { display: none; }
+
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  body { background: #ffffff; }
+  body > *:not(.print-area) { display: none !important; }
+  .print-area { display: block !important; font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; color: #000000; }
+  .print-area h1 { font-size: 15pt; margin: 0 0 4px; }
+  .print-area h2 { font-size: 12pt; margin: 14px 0 6px; }
+  .print-area .meta { font-size: 9pt; margin-bottom: 6px; }
+  .print-area table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  .print-area th, .print-area td { border: 1px solid #555555; padding: 3px 5px; text-align: left; vertical-align: top; }
+  .print-area th { background: #e5e7eb; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .print-area td.num { text-align: right; }
+  .print-area tr { page-break-inside: avoid; }
+  .print-area thead { display: table-header-group; }
+  .print-area .page-break { page-break-before: always; }
+  .print-area .sign { margin-top: 24px; display: flex; justify-content: flex-end; page-break-inside: avoid; }
+  .print-area .sign > div { width: 260px; text-align: center; }
+}
