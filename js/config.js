@@ -21,5 +21,5 @@ const SIBER_CONFIG = {
   DEV_SKIP_TOKEN: true,
 
   // Versi aplikasi di sisi siswa (naikkan setiap ada perubahan)
-  CLIENT_VERSION: '0.5.0'
+  CLIENT_VERSION: '0.6.0'
 };
