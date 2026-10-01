@@ -115,7 +115,14 @@
         <table class="info-table"><tbody id="intro-info"></tbody></table>
         <h4>Aturan</h4>
         <ul id="intro-rules" class="rules"></ul>
-        <div id="intro-token-note" class="msg msg-warn" hidden></div>
+
+        <div id="intro-token-box" class="token-box" hidden>
+          <label for="intro-token">Token dari guru</label>
+          <input id="intro-token" type="text" autocomplete="off" autocorrect="off" autocapitalize="characters"
+                 spellcheck="false" maxlength="20" placeholder="contoh: X7K9-2QMT">
+          <p class="small">Token dibacakan guru di kelas saat ujian akan dimulai. Pemeriksaan token tidak memerlukan internet.</p>
+        </div>
+
         <div id="intro-message" class="msg" hidden></div>
         <button type="button" id="btn-intro-start" class="btn btn-primary btn-block">Mulai ujian sekarang</button>
         <button type="button" id="btn-intro-back" class="btn btn-light btn-block">Kembali</button>
@@ -199,6 +206,7 @@
   <script src="js/api.js" defer></script>
   <script src="js/auth.js" defer></script>
   <script src="js/sync.js" defer></script>
+  <script src="js/token.js" defer></script>
   <script src="js/timer.js" defer></script>
   <script src="js/questions.js" defer></script>
   <script src="js/exam.js" defer></script>
