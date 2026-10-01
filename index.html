@@ -80,6 +80,14 @@
       </div>
 
       <div class="card">
+        <h3>Hasil ujian di perangkat ini</h3>
+        <p class="small">Hasil dikirim otomatis ke server saat ada internet. Jangan hapus data aplikasi sebelum semua hasil TERKIRIM.</p>
+        <button type="button" id="btn-sync-now" class="btn btn-primary btn-block">Kirim hasil sekarang</button>
+        <div id="results-message" class="msg" hidden></div>
+        <div id="results-list"></div>
+      </div>
+
+      <div class="card">
         <h3>Daftar ujian</h3>
         <p class="small">Unduh soal saat ada internet (di rumah). Ujian hanya bisa dikerjakan jika berstatus READY.</p>
         <div class="btn-row">
@@ -103,7 +111,7 @@
       <div class="card danger-zone">
         <h3>Khusus pengujian</h3>
         <p class="small">Menghapus SEMUA data aplikasi di perangkat ini (akun tersimpan, soal, hasil ujian, pengaturan).
-          Jangan dipakai setelah ujian sungguhan dimulai.</p>
+          Jangan dipakai sebelum semua hasil ujian TERKIRIM.</p>
         <button type="button" id="btn-wipe" class="btn btn-danger btn-block">Hapus semua data lokal</button>
       </div>
     </section>
@@ -185,8 +193,8 @@
         <h2>Ujian selesai</h2>
         <div id="done-message" class="msg msg-ok"></div>
         <table class="info-table"><tbody id="done-info"></tbody></table>
-        <p class="small">Hasil tersimpan di perangkat dan akan dikirim ke server saat ada internet
-          (fitur kirim dibuat di Phase 9). Jangan hapus data aplikasi atau data browser.</p>
+        <p class="small">Hasil tersimpan di perangkat dan dikirim otomatis ke server saat ada internet.
+          Status pengiriman bisa dilihat di beranda. Jangan hapus data aplikasi sebelum hasil TERKIRIM.</p>
         <button type="button" id="btn-done-home" class="btn btn-primary btn-block">Kembali ke beranda</button>
       </div>
     </section>
@@ -210,6 +218,7 @@
   <script src="js/timer.js" defer></script>
   <script src="js/questions.js" defer></script>
   <script src="js/exam.js" defer></script>
+  <script src="js/submit.js" defer></script>
   <script src="js/app.js" defer></script>
 </body>
 </html>
