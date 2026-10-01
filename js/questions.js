@@ -2,13 +2,13 @@
  * SIBER-UJIAN — questions.js
  * Pengacakan soal/pilihan (sekali saja saat ujian dimulai) dan
  * penyusunan soal sesuai urutan yang tersimpan di attempt.
+ * Paket terkunci dibuka di memori memakai kunci yang tersimpan di attempt.
  */
 const Questions = (function () {
   'use strict';
 
   const LETTERS = ['A', 'B', 'C', 'D'];
 
-  /** Bilangan acak 0..max-1 yang adil, memakai crypto (bukan Math.random). */
   function randomInt(max) {
     const arr = new Uint32Array(1);
     const limit = Math.floor(0x100000000 / max) * max;
@@ -20,7 +20,6 @@ const Questions = (function () {
     return x % max;
   }
 
-  /** Fisher-Yates shuffle. Mengembalikan salinan baru. */
   function shuffle(list) {
     const a = list.slice();
     for (let i = a.length - 1; i > 0; i--) {
@@ -37,10 +36,6 @@ const Questions = (function () {
     return qs.sort(function (a, b) { return a.number - b.number; });
   }
 
-  /**
-   * Dipanggil SEKALI saat ujian dimulai. Hasilnya disimpan di attempt dan tidak pernah dibuat ulang.
-   * option_orders[qid] = ['C','A','D','B'] artinya: tampilan A = pilihan asli C, dst.
-   */
   function buildOrder(questions, randomQuestion, randomOption) {
     const ids = questions.map(function (q) { return q.question_id; });
     const optionOrders = {};
@@ -59,9 +54,19 @@ const Questions = (function () {
     const map = {};
     list.forEach(function (q) { map[q.question_id] = q; });
 
+    let content = null;
+    if (list.some(function (q) { return q.encrypted; })) {
+      if (!attempt.content_key) throw new Error('Kunci soal tidak ada di catatan ujian.');
+      const exam = await DB.get('exams', attempt.exam_id);
+      content = await Token.decryptQuestions(exam, Token.b64ToBytes(attempt.content_key));
+    }
+
     return attempt.question_order.map(function (qid, i) {
       const q = map[qid];
       if (!q) throw new Error('Soal ' + qid + ' tidak ditemukan di perangkat. Data ujian rusak.');
+      const text = content ? content[qid] : { question: q.question, options: q.options };
+      if (!text || !text.options) throw new Error('Teks soal ' + qid + ' tidak dapat dibuka.');
+
       const order = attempt.option_orders[qid];
       if (!Array.isArray(order) || order.length !== 4 ||
           LETTERS.some(function (L) { return order.indexOf(L) === -1; })) {
@@ -71,10 +76,10 @@ const Questions = (function () {
         question_id: qid,
         original_number: q.number,
         display_number: i + 1,
-        question: q.question,
+        question: text.question,
         image: q.has_image ? q.image : null,
         options: order.map(function (orig, idx) {
-          return { display: LETTERS[idx], original: orig, text: q.options[orig] };
+          return { display: LETTERS[idx], original: orig, text: text.options[orig] };
         })
       };
     });
