@@ -129,3 +129,14 @@ const UI = (function () {
     todayLocal: todayLocal
   };
 })();
+
+/* Phase 13: sembunyikan alat pengujian di versi produksi (atur di config.js). */
+document.addEventListener('DOMContentLoaded', function () {
+  if (typeof SIBER_CONFIG === 'undefined') return;
+  if (!SIBER_CONFIG.DEBUG) {
+    document.querySelectorAll('.debug').forEach(function (n) { n.hidden = true; });
+  }
+  if (!SIBER_CONFIG.ALLOW_LOCAL_WIPE) {
+    document.querySelectorAll('.danger-zone').forEach(function (n) { n.hidden = true; });
+  }
+});
