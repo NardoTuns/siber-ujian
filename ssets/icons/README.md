@@ -1,1 +1,0 @@
-Ikon aplikasi SIBER-UJIAN
