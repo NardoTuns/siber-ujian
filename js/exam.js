@@ -1,6 +1,7 @@
 /**
  * SIBER-UJIAN — exam.js
- * Mengerjakan ujian MODE TOTAL dan MODE PER_SOAL, dengan pemulihan yang kuat.
+ * Mengerjakan ujian MODE TOTAL dan MODE PER_SOAL, dengan pemulihan yang kuat
+ * dan token offline untuk membuka paket soal terkunci.
  *
  * ATURAN WAJIB (kedua mode):
  *  - Setiap jawaban LANGSUNG disimpan ke IndexedDB saat dipilih.
@@ -9,27 +10,24 @@
  *  - Ujian yang sudah selesai tidak dapat dibuka kembali.
  *
  * ATURAN MODE PER_SOAL:
- *  - Setiap soal punya waktu sendiri (question_started_at_ms .. question_end_at_ms).
- *  - Tidak boleh maju sebelum waktu soal habis, walaupun sudah menjawab.
- *  - Tidak boleh kembali dan tidak boleh melompat.
- *  - Saat waktu soal habis: soal dikunci, soal berikutnya dimulai.
+ *  - Setiap soal punya waktu sendiri; tidak boleh maju sebelum habis; tidak boleh kembali.
  *  - Jawaban untuk soal yang sudah terkunci DITOLAK oleh database.
  *
- * PEMULIHAN (Phase 7):
- *  - Data attempt diperiksa saat dibuka ulang; timer_state diperbaiki dari attempt.
- *  - Jam mundur (saat terbuka maupun tertutup) dideteksi dan dicatat di clock_events.
- *  - Data rusak: ujian bisa ditutup dengan jawaban tersimpan tetap aman.
- *  - Hanya satu tab yang boleh membuka ujian.
+ * TOKEN (Phase 8):
+ *  - Ujian bertoken hanya bisa dimulai jika token membuka paket soal.
+ *  - Token TIDAK disimpan; yang disimpan di attempt hanyalah kunci paket.
  */
 const Exam = (function () {
   'use strict';
 
   const HEARTBEAT_MS = 5000;
-  const SAVE_GRACE_MS = 2000;                 // toleransi proses simpan untuk ketukan di detik terakhir
-  const RESUME_BACKWARD_TOLERANCE_MS = 5000;  // jam mundur saat tertutup lebih dari ini dicatat
-  const CLOSED_GAP_REPORT_MS = 60000;         // aplikasi tertutup lebih dari ini dicatat
+  const SAVE_GRACE_MS = 2000;
+  const RESUME_BACKWARD_TOLERANCE_MS = 5000;
+  const CLOSED_GAP_REPORT_MS = 60000;
   const MAX_CLOCK_EVENTS = 100;
   const EXAM_LOCK_NAME = 'siber-ujian-exam';
+  const TOKEN_MAX_FAIL = 5;
+  const TOKEN_LOCK_MS = 60000;
 
   const $ = UI.$;
   const el = UI.el;
@@ -42,8 +40,8 @@ const Exam = (function () {
   };
 
   let hooks = {};
-  let S = null;             // sesi ujian yang sedang tampil
-  let pendingIntro = null;  // { user, exam } untuk layar pembuka
+  let S = null;
+  let pendingIntro = null;
   let startBusy = false;
   let heartbeatHandle = null;
   let noticeHandle = null;
@@ -53,6 +51,7 @@ const Exam = (function () {
   let wakeLock = null;
 
   function fail(code, message) { return { ok: false, code: code, message: message }; }
+  function failRes(code, message) { return { success: false, error: { code: code, message: message } }; }
   function isPerQ() { return !!S && S.attempt.mode === 'PER_SOAL'; }
   function makeError(code, message) { const e = new Error(message); e.code = code; return e; }
 
@@ -60,9 +59,8 @@ const Exam = (function () {
    * KUNCI SATU TAB & LAYAR TETAP MENYALA
    * ========================================================= */
 
-  /** Hanya satu tab yang boleh membuka ujian. true jika berhasil (atau browser tidak mendukung). */
   function acquireExamLock() {
-    if (releaseLockFn) return Promise.resolve(true); // sudah dipegang halaman ini
+    if (releaseLockFn) return Promise.resolve(true);
     if (!navigator.locks || !navigator.locks.request) return Promise.resolve(true);
     return new Promise(function (resolve) {
       navigator.locks.request(EXAM_LOCK_NAME, { ifAvailable: true }, function (lock) {
@@ -86,7 +84,7 @@ const Exam = (function () {
         wakeLock = await navigator.wakeLock.request('screen');
         wakeLock.addEventListener('release', function () { wakeLock = null; });
       }
-    } catch (e) { /* tidak didukung atau ditolak: abaikan */ }
+    } catch (e) { /* tidak didukung atau ditolak */ }
   }
 
   function releaseWakeLock() {
@@ -152,8 +150,14 @@ const Exam = (function () {
     if (cfg.end_date && today > cfg.end_date) {
       return fail('EXAM_EXPIRED', 'Masa ujian sudah berakhir (' + cfg.end_date + '). Periksa juga tanggal di perangkat.');
     }
-    if (cfg.token_required && !SIBER_CONFIG.DEV_SKIP_TOKEN) {
-      return fail('TOKEN_NOT_YET', 'Ujian ini memerlukan token. Verifikasi token dibuat di Phase 8.');
+
+    if (cfg.token_required) {
+      if (!exam.encrypted) {
+        return fail('PACKAGE_OLD', 'Paket soal ujian ini masih versi lama (belum dikunci token). Unduh ulang saat ada internet.');
+      }
+      if (!Array.isArray(exam.key_slots) || !exam.key_slots.length) {
+        return fail('TOKEN_NOT_SET', 'Data token tidak ada di paket. Unduh ulang saat ada internet.');
+      }
     }
 
     const errs = await Sync.verifyStoredPackage(examId);
@@ -161,6 +165,46 @@ const Exam = (function () {
       return fail('PACKAGE_BROKEN', 'Data soal di perangkat bermasalah: ' + errs.join('; ') + '. Unduh ulang saat ada internet.');
     }
     return { ok: true, exam: exam };
+  }
+
+  /* ---------- Token ---------- */
+
+  /** Memeriksa token, membuka paket, dan memastikan semua soal terbaca. */
+  async function verifyTokenForStart(user, exam, input) {
+    const failKey = 'token_fail:' + user.user_id + ':' + exam.exam_id;
+    const f = await DB.getSetting(failKey);
+    const lockActive = f && f.count >= TOKEN_MAX_FAIL && (Date.now() - f.last_at) < TOKEN_LOCK_MS;
+    if (lockActive) return failRes('TOKEN_LOCKED', 'Terlalu banyak token salah. Tunggu 1 menit lalu coba lagi.');
+    if (!Token.normalize(input)) return failRes('TOKEN_EMPTY', 'Masukkan token yang dibacakan guru.');
+
+    const u = await Token.unlock(exam, input);
+    if (!u.success) {
+      const base = (f && (Date.now() - f.last_at) < TOKEN_LOCK_MS) ? f.count : 0;
+      await DB.setSetting(failKey, { count: base + 1, last_at: Date.now() });
+      return u;
+    }
+
+    const cfg = await DB.getSetting('app_config');
+    const m = Token.checkMeta(u.data.meta, exam, Timer.now(), cfg ? cfg.school_code : '');
+    if (!m.success) return m;
+
+    const content = await Token.decryptQuestions(exam, u.data.key);
+    const qs = await Questions.loadExamQuestions(exam.exam_id);
+    const missing = qs.filter(function (q) { return !content[q.question_id]; });
+    if (missing.length) {
+      return failRes('PACKAGE_BROKEN', 'Sebagian soal tidak dapat dibuka. Unduh ulang saat ada internet.');
+    }
+
+    await DB.delSetting(failKey);
+    return {
+      success: true,
+      data: {
+        content_key: Token.bytesToB64(u.data.key),
+        token_id: u.data.token_id,
+        token_meta: u.data.meta,
+        verified_at: new Date(Timer.now()).toISOString()
+      }
+    };
   }
 
   function timerStateFor(a, lastSeen) {
@@ -185,7 +229,7 @@ const Exam = (function () {
     };
   }
 
-  async function createAttempt(user, exam) {
+  async function createAttempt(user, exam, tokenInfo) {
     const cfg = exam.exam_raw;
     const perQ = cfg.mode === 'PER_SOAL';
     const qs = await Questions.loadExamQuestions(exam.exam_id);
@@ -223,6 +267,11 @@ const Exam = (function () {
       question_order: order.question_order,
       option_orders: order.option_orders,
       answered_count: 0,
+      encrypted: !!exam.encrypted,
+      content_key: tokenInfo ? tokenInfo.content_key : null,
+      token_id: tokenInfo ? tokenInfo.token_id : null,
+      token_meta: tokenInfo ? tokenInfo.token_meta : null,
+      token_verified_at: tokenInfo ? tokenInfo.verified_at : null,
       package_version: exam.package_version,
       package_checksum: exam.checksum,
       client_version: SIBER_CONFIG.CLIENT_VERSION,
@@ -246,10 +295,6 @@ const Exam = (function () {
     return attempt;
   }
 
-  /**
-   * Simpan satu jawaban. Ditolak jika ujian ditutup, waktu habis,
-   * atau (PER_SOAL) soal ini bukan soal yang sedang aktif.
-   */
   function saveAnswerToDb(attemptId, q, original, display, clickedAt) {
     return DB.transaction(['attempts', 'answers'], 'readwrite', function (t, set, failTx) {
       const r = t.objectStore('attempts').get(attemptId);
@@ -310,7 +355,6 @@ const Exam = (function () {
     }).catch(function (e) { console.warn('Gagal menyimpan posisi soal:', e); });
   }
 
-  /** PER_SOAL: kunci soal aktif dan buka soal berikutnya. Ditolak jika waktu soal belum habis. */
   function advanceQuestion(attemptId, expectedIndex) {
     return DB.transaction(['attempts', 'timer_state'], 'readwrite', function (t, set, failTx) {
       const r = t.objectStore('attempts').get(attemptId);
@@ -348,7 +392,6 @@ const Exam = (function () {
     });
   }
 
-  /** Menutup ujian: COMPLETED + PENDING_SYNC + masuk antrean kirim. Aman dipanggil berulang. */
   async function finishAttempt(attemptId, reason) {
     const answers = await DB.getAllByIndex('answers', 'attempt_id', attemptId);
     const answered = answers.filter(function (a) { return !!a.answer; }).length;
@@ -438,8 +481,6 @@ const Exam = (function () {
     }
   }
 
-  /* ---------- Detak "terakhir terlihat" ---------- */
-
   async function beat() {
     if (!S) return;
     try {
@@ -468,16 +509,13 @@ const Exam = (function () {
    * PEMERIKSAAN & PERBAIKAN
    * ========================================================= */
 
-  /**
-   * Memeriksa attempt sebelum dilanjutkan. Melempar DATA_BROKEN jika tidak bisa diperbaiki.
-   * timer_state yang hilang/tidak cocok dibuat ulang dari attempt (attempt = sumber kebenaran).
-   */
   async function checkAndRepairAttempt(a) {
     const problems = [];
     const N = Array.isArray(a.question_order) ? a.question_order.length : 0;
     if (!N) problems.push('urutan soal hilang');
     if (!a.option_orders || typeof a.option_orders !== 'object') problems.push('urutan pilihan hilang');
     if (!(a.started_at_ms > 0)) problems.push('waktu mulai hilang');
+    if (a.encrypted && !a.content_key) problems.push('kunci soal hilang');
 
     if (a.mode === 'TOTAL') {
       const expected = a.started_at_ms + a.duration_seconds * 1000;
@@ -513,7 +551,6 @@ const Exam = (function () {
     return { lastSeen: lastSeen, repaired: mismatch };
   }
 
-  /** Data ujian rusak: tawarkan menutup ujian dengan jawaban yang sudah tersimpan tetap aman. */
   async function handleBroken(a, e) {
     releaseExamLock();
     const ok = window.confirm(
@@ -527,11 +564,6 @@ const Exam = (function () {
     return false;
   }
 
-  /**
-   * Dijalankan saat aplikasi dibuka:
-   *  - ujian selesai yang belum masuk antrean kirim dimasukkan kembali,
-   *  - sisa timer_state milik ujian yang sudah selesai dihapus.
-   */
   async function repair() {
     let fixed = 0;
     const attempts = await DB.getAll('attempts');
@@ -607,40 +639,42 @@ const Exam = (function () {
     rows.push(['Peserta', user.name + ' (' + user.class + ')']);
     UI.setRows('intro-info', rows);
 
-    const rules = perQ ? [
-      'Setiap soal punya waktu sendiri: ' + cfg.duration_seconds + ' detik.',
-      'Anda TIDAK dapat pindah ke soal berikutnya sebelum waktu soal habis, walaupun sudah menjawab.',
-      'Saat waktu soal habis, soal dikunci dan soal berikutnya terbuka otomatis.',
-      'Anda TIDAK dapat kembali ke soal sebelumnya.',
-      'Selama waktu soal masih berjalan, jawaban boleh diganti.',
-      'Setiap jawaban langsung tersimpan di perangkat saat dipilih.',
-      'Jika aplikasi tertutup atau HP mati, waktu soal yang sedang dibuka tetap berjalan. ' +
-        'Jika waktunya habis saat tertutup, soal itu dikunci dan soal berikutnya dimulai saat aplikasi dibuka lagi.',
-      'Mengubah jam HP tidak menambah waktu, dan akan dicatat untuk guru.',
-      'Ujian selesai otomatis setelah waktu soal terakhir habis.',
-      'Internet tidak diperlukan selama ujian.'
-    ] : [
-      'Waktu mulai berjalan saat Anda menekan "Mulai ujian sekarang" dan TIDAK berhenti walaupun aplikasi ditutup atau HP mati.',
-      'Setiap jawaban langsung tersimpan di perangkat saat dipilih.',
-      'Anda boleh berpindah soal, kembali ke soal sebelumnya, dan mengganti jawaban selama waktu masih ada.',
-      'Mengubah jam HP tidak menambah waktu, dan akan dicatat untuk guru.',
-      'Jika waktu habis, ujian selesai otomatis.',
-      'Ujian yang sudah selesai tidak dapat dibuka kembali.',
-      'Internet tidak diperlukan selama ujian.'
-    ];
+    const rules = [];
+    if (cfg.token_required) rules.push('Ujian ini memerlukan TOKEN dari guru. Token dibacakan di kelas saat ujian akan dimulai.');
+    if (perQ) {
+      rules.push(
+        'Setiap soal punya waktu sendiri: ' + cfg.duration_seconds + ' detik.',
+        'Anda TIDAK dapat pindah ke soal berikutnya sebelum waktu soal habis, walaupun sudah menjawab.',
+        'Saat waktu soal habis, soal dikunci dan soal berikutnya terbuka otomatis.',
+        'Anda TIDAK dapat kembali ke soal sebelumnya.',
+        'Selama waktu soal masih berjalan, jawaban boleh diganti.',
+        'Setiap jawaban langsung tersimpan di perangkat saat dipilih.',
+        'Jika aplikasi tertutup atau HP mati, waktu soal yang sedang dibuka tetap berjalan. ' +
+          'Jika waktunya habis saat tertutup, soal itu dikunci dan soal berikutnya dimulai saat aplikasi dibuka lagi.',
+        'Mengubah jam HP tidak menambah waktu, dan akan dicatat untuk guru.',
+        'Ujian selesai otomatis setelah waktu soal terakhir habis.',
+        'Internet tidak diperlukan selama ujian.'
+      );
+    } else {
+      rules.push(
+        'Waktu mulai berjalan saat Anda menekan "Mulai ujian sekarang" dan TIDAK berhenti walaupun aplikasi ditutup atau HP mati.',
+        'Setiap jawaban langsung tersimpan di perangkat saat dipilih.',
+        'Anda boleh berpindah soal, kembali ke soal sebelumnya, dan mengganti jawaban selama waktu masih ada.',
+        'Mengubah jam HP tidak menambah waktu, dan akan dicatat untuk guru.',
+        'Jika waktu habis, ujian selesai otomatis.',
+        'Ujian yang sudah selesai tidak dapat dibuka kembali.',
+        'Internet tidak diperlukan selama ujian.'
+      );
+    }
     const ul = $('intro-rules');
     ul.replaceChildren();
     rules.forEach(function (r) { ul.appendChild(el('li', { text: r })); });
 
-    if (cfg.token_required && SIBER_CONFIG.DEV_SKIP_TOKEN) {
-      UI.showMsg('intro-token-note', 'warn',
-        'MODE PENGEMBANGAN: ujian ini memerlukan token, tetapi verifikasi token baru dibuat di Phase 8. ' +
-        'Untuk sementara langkah token dilewati.');
-    } else {
-      UI.hideMsg('intro-token-note');
-    }
+    $('intro-token-box').hidden = !cfg.token_required;
+    $('intro-token').value = '';
     UI.hideMsg('intro-message');
     UI.showScreen('exam-intro');
+    if (cfg.token_required) $('intro-token').focus();
     return { ok: true };
   }
 
@@ -648,8 +682,24 @@ const Exam = (function () {
     if (!pendingIntro || startBusy) return;
     startBusy = true;
     const btn = $('btn-intro-start');
-    UI.setBusy(btn, true, 'Menyiapkan ujian...');
+    UI.hideMsg('intro-message');
     try {
+      const user = pendingIntro.user;
+      const exam = pendingIntro.exam;
+
+      let tokenInfo = null;
+      if (exam.exam_raw.token_required) {
+        UI.setBusy(btn, true, 'Memeriksa token...');
+        const tr = await verifyTokenForStart(user, exam, $('intro-token').value);
+        if (!tr.success) {
+          UI.showMsg('intro-message', 'error', UI.errorText(tr));
+          $('intro-token').focus();
+          return;
+        }
+        tokenInfo = tr.data;
+      }
+
+      UI.setBusy(btn, true, 'Menyiapkan ujian...');
       if (!(await acquireExamLock())) {
         UI.showMsg('intro-message', 'error',
           'Ada ujian yang sedang terbuka di tab atau jendela lain. Tutup tab lain tersebut terlebih dahulu.');
@@ -657,12 +707,13 @@ const Exam = (function () {
       }
       let attempt;
       try {
-        attempt = await createAttempt(pendingIntro.user, pendingIntro.exam);
+        attempt = await createAttempt(user, exam, tokenInfo);
       } catch (e) {
         releaseExamLock();
         throw e;
       }
       pendingIntro = null;
+      $('intro-token').value = '';
       await enterExam(attempt);
     } catch (e) {
       if (e && e.code === 'ALREADY_EXISTS') {
@@ -684,6 +735,7 @@ const Exam = (function () {
 
   async function onIntroBack() {
     pendingIntro = null;
+    $('intro-token').value = '';
     if (hooks.onExit) await hooks.onExit();
   }
 
@@ -732,7 +784,6 @@ const Exam = (function () {
     DB.requestPersistence();
   }
 
-  /** Masuk ujian; jika data rusak, tawarkan penutupan aman. true jika berhasil masuk. */
   async function enterSafely(a) {
     try {
       await enterExam(a);
@@ -790,7 +841,6 @@ const Exam = (function () {
       return;
     }
 
-    // PER_SOAL
     let at = a;
     let first = 'Ujian dilanjutkan. Waktu soal ini tetap berjalan selama aplikasi tertutup.';
     if (Timer.now() >= at.question_end_at_ms) {
@@ -1232,6 +1282,7 @@ const Exam = (function () {
     hooks = h || {};
     $('btn-intro-start').addEventListener('click', onIntroStart);
     $('btn-intro-back').addEventListener('click', onIntroBack);
+    $('intro-token').addEventListener('keydown', function (e) { if (e.key === 'Enter') onIntroStart(); });
     $('exam-options').addEventListener('click', onOptionClick);
     $('btn-clear-answer').addEventListener('click', onClearAnswer);
     $('btn-prev').addEventListener('click', function () { if (S) goTo(S.index - 1); });
